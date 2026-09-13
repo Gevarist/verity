@@ -44,15 +44,35 @@ namespace Compiler.CompilationModel
 open Compiler
 open Compiler.Yul
 
-/-- Single bridge from typed unsafe/raw Yul fragments into the EVMYul AST.
+/-! Unsafe-Yul provenance markers and bridge.
+
+    `YulStmt` is deliberately a small, shared AST and does not carry source
+    provenance.  These comments preserve the `Stmt.unsafeYul` boundary after
+    lowering without changing the generated EVM semantics.  The checked
+    arithmetic peephole in `Compiler.CodegenCommon` treats the marked region
+    as opaque.
+
     Proof obligations and trust metadata live on `UnsafeYulFragment`; this
     function is intentionally the only compiler lowering point for that escape
-    hatch. -/
+    hatch.  The comment markers are provenance only and are ignored by Yul. -/
+private def escapeUnsafeYulMarkerComment : YulStmt → YulStmt
+  | YulStmt.comment text =>
+      if text == UnsafeYulFragment.beginMarker || text == UnsafeYulFragment.endMarker then
+        YulStmt.comment (text ++ "_raw")
+      else
+        YulStmt.comment text
+  | stmt => stmt
+
 def unsafeYulToEVMYul (fragment : UnsafeYulFragment) : List YulStmt :=
-  fragment.stmts
+  YulStmt.comment UnsafeYulFragment.beginMarker ::
+    fragment.stmts.map escapeUnsafeYulMarkerComment ++
+    [YulStmt.comment UnsafeYulFragment.endMarker]
 
 theorem unsafeYulToEVMYul_eq (fragment : UnsafeYulFragment) :
-    unsafeYulToEVMYul fragment = fragment.stmts := rfl
+    unsafeYulToEVMYul fragment =
+      YulStmt.comment UnsafeYulFragment.beginMarker ::
+        fragment.stmts.map escapeUnsafeYulMarkerComment ++
+        [YulStmt.comment UnsafeYulFragment.endMarker] := rfl
 
 private def compileAdtStorageWrite (fields : List Field)
     (dynamicSource : DynamicDataSource) (adtTypes : List AdtTypeDef)
@@ -278,6 +298,8 @@ def compileStmtWithFork (fields : List Field) (events : List EventDef := [])
       let codeExpr ← compileExprWithInternals fields dynamicSource internalFunctions code
       let codeName := "__panic_code"
       pure [YulStmt.block (YulStmt.let_ codeName codeExpr :: solidityPanicPayloadExpr (YulExpr.ident codeName))]
+  | .panic code =>
+      pure (solidityPanicPayload code.toNat)
   | Stmt.return value =>
     do
       let valueExpr ← compileExprWithInternals fields dynamicSource internalFunctions value
@@ -651,7 +673,7 @@ theorem compileStmt_unsafeYul
     (adtTypes : List AdtTypeDef := [])
     (fragment : UnsafeYulFragment) :
     compileStmt fields events errors dynamicSource internalRetNames isInternal inScopeNames adtTypes
-      (Stmt.unsafeYul fragment) = pure fragment.stmts := by
+      (Stmt.unsafeYul fragment) = pure (unsafeYulToEVMYul fragment) := by
   simp [compileStmt, compileStmtWithFork, unsafeYulToEVMYul]
 
 end Compiler.CompilationModel

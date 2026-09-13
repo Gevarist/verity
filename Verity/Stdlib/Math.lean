@@ -263,8 +263,8 @@ instead of the visually divergent
 let total ← requireSomeUint (safeAdd total amount) "Overflow"
 ```
 
-The macro lowers `let x ← addPanic a b` directly to the same IR as
-`let x ← requireSomeUint (safeAdd a b) "Panic(0x11): arithmetic overflow"`. -/
+The macro lowers `let x ← addPanic a b` to a direct failure check followed by
+the structured Solidity `Panic(0x11)` payload. -/
 
 /-- `a + b` on `Uint256` with Solidity-0.8 panic-on-overflow semantics. -/
 def addPanic (a b : Uint256) : Contract Uint256 :=

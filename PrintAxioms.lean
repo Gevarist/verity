@@ -4358,6 +4358,8 @@ end Verity.AxiomAudit
 
   -- Compiler/Proofs/IRGeneration/PanicPayloadIR.lean
   Compiler.Proofs.IRGeneration.execIRStmts_solidityPanicPayload
+  Compiler.Proofs.IRGeneration.execIRStmts_arithmeticOverflowPanicPayload
+  Compiler.Proofs.IRGeneration.execIRStmts_divisionByZeroPanicPayload
 
   -- Compiler/Proofs/IRGeneration/ParamLoading.lean
   Compiler.Proofs.IRGeneration.ParamLoading.uint256_modulus_eq_evm
@@ -7523,4 +7525,4 @@ end Verity.AxiomAudit
   Compiler.Proofs.YulGeneration.YulTransaction.ofIR_args
 ]
 
--- Total: 6958 theorems/lemmas (4968 public, 1990 private, 0 sorry'd)
+-- Total: 6960 theorems/lemmas (4970 public, 1990 private, 0 sorry'd)

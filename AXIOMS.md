@@ -383,6 +383,22 @@ correctness in the `ExprCompileCore` fragment: `min`, `max`, `ceilDiv`, `ite`
 [`docs/ARITHMETIC_PROFILE.md`](docs/ARITHMETIC_PROFILE.md) for the full
 specification.
 
+The structured checked-arithmetic panic migration adds **no project-level
+axiom**. The closed `Verity.Core.PanicCode` type maps `.arithmeticOverflow` to
+`0x11` and `.divisionByZero` to `0x12`; checked arithmetic carries those
+constructors through `Stmt.panic` and typed IR before converting explicitly at
+canonical `Panic(uint256)` payload lowering. General runtime panic expressions
+and generated `0x21` enum guards remain on the raw `Stmt.panicCode Expr`
+compatibility path. The exact payload has the general theorem
+`Compiler.Proofs.IRGeneration.PanicPayloadIR.execIRStmts_solidityPanicPayload`
+and typed specializations for both constructors.
+The macro-shape and post-codegen rewrite regression tests use `native_decide`;
+that mechanism is reported in `artifacts/trust_surface_report.json` under the
+documented native-code trust boundary above and does not change the active
+axiom set. Unsafe-Yul fragments are marked as optimizer-opaque at the lowering
+boundary, so this provenance guard also introduces no axiom. `solidityMappingSlot_injective`
+therefore remains the single active project-level axiom.
+
 ## Consumer Intrinsic Obligations (from verity_intrinsic)
 
 Intrinsics do not add project-level Verity axioms. Each `verity_intrinsic`

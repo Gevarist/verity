@@ -153,8 +153,8 @@ private def yulExprSame (a b : YulExpr) : Bool :=
 private def yulStmtListSame (a b : List YulStmt) : Bool :=
   toString (repr a) == toString (repr b)
 
-private def isRevertMessageBody (message : String) (body : List YulStmt) : Bool :=
-  yulStmtListSame body (revertWithMessage message)
+private def isTypedPanicBody (code : Verity.Core.PanicCode) (body : List YulStmt) : Bool :=
+  yulStmtListSame body (solidityPanicPayload code.toNat)
 
 private def checkedAddFailCond (a b : YulExpr) : YulExpr :=
   YulExpr.call "lt" [YulExpr.call "add" [a, b], a]
@@ -178,37 +178,67 @@ private def checkedMulFailCond (a b : YulExpr) : YulExpr :=
   ]
 
 private def checkedDivFailCond (b : YulExpr) : YulExpr :=
-  YulExpr.call "iszero" [YulExpr.call "iszero" [
-    YulExpr.call "eq" [b, YulExpr.lit 0]
-  ]]
+  YulExpr.call "eq" [b, YulExpr.lit 0]
+
+private def isUnsafeYulBeginMarker : YulStmt → Bool
+  | YulStmt.comment text => text == UnsafeYulFragment.beginMarker
+  | _ => false
+
+private def isUnsafeYulEndMarker : YulStmt → Bool
+  | YulStmt.comment text => text == UnsafeYulFragment.endMarker
+  | _ => false
 
 private def checkedArithmeticReplacement? (prev cur : YulStmt) : Option YulStmt :=
   match prev, cur with
   | YulStmt.if_ cond body, YulStmt.let_ name (YulExpr.call "add" [a, b]) =>
       if yulExprSame cond (checkedAddFailCond a b) &&
-          isRevertMessageBody "Panic(0x11): arithmetic overflow" body then
+          isTypedPanicBody .arithmeticOverflow body then
         some (YulStmt.let_ name (YulExpr.call checkedAddUint256HelperName [a, b]))
       else
         none
   | YulStmt.if_ cond body, YulStmt.let_ name (YulExpr.call "sub" [a, b]) =>
       if yulExprSame cond (checkedSubFailCond a b) &&
-          isRevertMessageBody "Panic(0x11): arithmetic underflow" body then
+          isTypedPanicBody .arithmeticOverflow body then
         some (YulStmt.let_ name (YulExpr.call checkedSubUint256HelperName [a, b]))
       else
         none
   | YulStmt.if_ cond body, YulStmt.let_ name (YulExpr.call "mul" [a, b]) =>
       if yulExprSame cond (checkedMulFailCond a b) &&
-          isRevertMessageBody "Panic(0x11): arithmetic overflow" body then
+          isTypedPanicBody .arithmeticOverflow body then
         some (YulStmt.let_ name (YulExpr.call checkedMulUint256HelperName [a, b]))
       else
         none
   | YulStmt.if_ cond body, YulStmt.let_ name (YulExpr.call "div" [a, b]) =>
       if yulExprSame cond (checkedDivFailCond b) &&
-          isRevertMessageBody "Panic(0x12): division by zero" body then
+          isTypedPanicBody .divisionByZero body then
         some (YulStmt.let_ name (YulExpr.call checkedDivUint256HelperName [a, b]))
       else
         none
   | _, _ => none
+
+/-! Copy an unsafe-Yul region without recursively optimizing it.
+
+    The lowering boundary is represented by comment markers because the Yul
+    AST is shared with handwritten fragments and intentionally has no
+    provenance field.  A fuel argument keeps this traversal total and also
+    makes malformed/unclosed marker pairs fail closed by copying the remainder
+    unchanged. -/
+private def takeOpaqueUnsafeYulRegion : Nat → Nat → List YulStmt → List YulStmt × List YulStmt
+  | 0, _, stmts => (stmts, [])
+  | _fuel + 1, _, [] => ([], [])
+  | fuel + 1, depth, stmt :: rest =>
+      if isUnsafeYulBeginMarker stmt then
+        let (inside, tail) := takeOpaqueUnsafeYulRegion fuel (depth + 1) rest
+        (stmt :: inside, tail)
+      else if isUnsafeYulEndMarker stmt then
+        if depth == 1 then
+          ([], stmt :: rest)
+        else
+          let (inside, tail) := takeOpaqueUnsafeYulRegion fuel (depth - 1) rest
+          (stmt :: inside, tail)
+      else
+        let (inside, tail) := takeOpaqueUnsafeYulRegion fuel depth rest
+        (stmt :: inside, tail)
 
 mutual
 
@@ -235,13 +265,26 @@ private def optimizeCheckedArithmeticStmtFuel : Nat → YulStmt → YulStmt
 private def optimizeCheckedArithmeticStmtsFuel : Nat → List YulStmt → List YulStmt
   | 0, stmts => stmts
   | _fuel + 1, [] => []
-  | fuel + 1, [stmt] => [optimizeCheckedArithmeticStmtFuel fuel stmt]
-  | fuel + 1, prev :: cur :: rest =>
-      let prev' := optimizeCheckedArithmeticStmtFuel fuel prev
-      let cur' := optimizeCheckedArithmeticStmtFuel fuel cur
-      match checkedArithmeticReplacement? prev' cur' with
-      | some replacement => replacement :: optimizeCheckedArithmeticStmtsFuel fuel rest
-      | none => prev' :: optimizeCheckedArithmeticStmtsFuel fuel (cur :: rest)
+  | fuel + 1, beginMarker :: rest =>
+      if isUnsafeYulBeginMarker beginMarker then
+        let (opaqueStmts, tail) := takeOpaqueUnsafeYulRegion fuel 1 rest
+        match tail with
+        | endMarker :: after =>
+            if isUnsafeYulEndMarker endMarker then
+              beginMarker :: opaqueStmts ++ endMarker :: optimizeCheckedArithmeticStmtsFuel fuel after
+            else
+              beginMarker :: opaqueStmts
+        | [] =>
+            beginMarker :: opaqueStmts
+      else
+        match rest with
+        | [] => [optimizeCheckedArithmeticStmtFuel fuel beginMarker]
+        | cur :: tail =>
+            let prev' := optimizeCheckedArithmeticStmtFuel fuel beginMarker
+            let cur' := optimizeCheckedArithmeticStmtFuel fuel cur
+            match checkedArithmeticReplacement? prev' cur' with
+            | some replacement => replacement :: optimizeCheckedArithmeticStmtsFuel fuel tail
+            | none => prev' :: optimizeCheckedArithmeticStmtsFuel fuel (cur :: tail)
 
 end
 

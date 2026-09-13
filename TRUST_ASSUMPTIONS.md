@@ -175,7 +175,9 @@ Current theorem totals, property-test coverage, and proof status live in [docs/V
   too local to justify a first-class `Stmt` constructor.
 - **Status**: Raw Yul fragments lower through the single
   `unsafeYulToEVMYul` bridge and carry their own mechanics, termination
-  metadata, and local obligations. Raw memory reverts use
+  metadata, and local obligations. The bridge emits comment-only provenance
+  markers around each fragment; checked-arithmetic optimization treats those
+  marked regions as opaque and copies them unchanged. Raw memory reverts use
   `UnsafeYulFragment.rawRevert` through `Stmt.unsafeYul`.
 - **Mitigation**: Keep common typed primitives such as `mstore` and
   `calldatacopy` first-class only when Verity has stable semantics and they are
@@ -213,7 +215,34 @@ Current theorem totals, property-test coverage, and proof status live in [docs/V
 ## Semantic Caveats
 
 ### Wrapping Arithmetic
-`Uint256` arithmetic is **wrapping modulo 2^256**, matching the EVM. This is proven, not assumed (see `Compiler/Proofs/ArithmeticProfile.lean`). Checked operations (`safeAdd`, `safeSub`, `safeMul`) are available for overflow protection. See [docs/ARITHMETIC_PROFILE.md](docs/ARITHMETIC_PROFILE.md).
+`Uint256` arithmetic is **wrapping modulo 2^256**, matching the EVM. This is
+proven, not assumed (see `Compiler/Proofs/ArithmeticProfile.lean`). Checked
+operations (`safeAdd`, `safeSub`, `safeMul`, `safeDiv`) are available for
+explicit overflow and division-by-zero protection.
+
+The Solidity-0.8-style `addPanic`/`subPanic`/`mulPanic`/`divPanic` bind forms
+use the closed `PanicCode` domain: the macro emits a matching failure predicate
+plus `Stmt.panic .arithmeticOverflow` or `Stmt.panic .divisionByZero`, which
+compiles to the canonical 36-byte `Panic(uint256)` ABI payload (selector
+`0x4e487b71`, followed by code `0x11` or `0x12`). Direct Lean helper execution
+retains compatibility diagnostic strings; macro-generated compilation bypasses
+that path and does not encode those strings as `Error(string)`.
+`Compiler.Proofs.IRGeneration.PanicPayloadIR` proves the exact emitted
+IR-interpreter payload for every in-range code and specializes it to both typed
+constructors. General runtime panics and enum guards such as `0x21` remain on
+the raw `Stmt.panicCode Expr` path; raw lookalikes are not optimizer evidence.
+
+This does not widen the current generic whole-contract proof fragment:
+typed and raw panic statements remain excluded by its typed-revert
+effect-surface gate. Separately, the post-codegen `CodegenCommon` peephole that
+replaces the exact pair of adjacent statements—a guarded typed panic followed
+by its arithmetic result binding, together forming the guard/panic/arithmetic
+sequence—with the corresponding checked helper call is not covered by an
+end-to-end preservation theorem. Its present assurance is fail-closed
+structural matching plus positive and negative feature tests.
+This is an existing compiler-validation boundary whose behavior changed with
+the structured-panic migration; it introduces no new Lean axiom. See
+[docs/ARITHMETIC_PROFILE.md](docs/ARITHMETIC_PROFILE.md).
 
 ### Revert-State Modeling
 High-level semantics can expose intermediate state in reverted computations. EVM reverts discard state. Contracts should use checks-before-effects. See [docs/REVERT_STATE_MODEL.md](docs/REVERT_STATE_MODEL.md).

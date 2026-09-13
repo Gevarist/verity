@@ -41,4 +41,28 @@ theorem execIRStmts_solidityPanicPayload (fuel : Nat) (state : IRState)
       simp [h4, h0, h224]
     · simp [h4, h0]
 
+/-- A typed arithmetic-overflow panic lowers to the canonical payload with code
+word `0x11`; all memory outside the selector and code words is preserved. -/
+theorem execIRStmts_arithmeticOverflowPanicPayload (fuel : Nat) (state : IRState) :
+    execIRStmts (fuel + 4) state
+        (solidityPanicPayload Verity.Core.PanicCode.arithmeticOverflow.toNat) =
+      .revert { state with
+        memory := fun o =>
+          if o = 4 then 0x11
+          else if o = 0 then panicSelectorWord
+          else state.memory o } := by
+  simpa using execIRStmts_solidityPanicPayload fuel state 0x11 (by decide)
+
+/-- A typed division-by-zero panic lowers to the canonical payload with code
+word `0x12` (`18`); all memory outside the selector and code words is preserved. -/
+theorem execIRStmts_divisionByZeroPanicPayload (fuel : Nat) (state : IRState) :
+    execIRStmts (fuel + 4) state
+        (solidityPanicPayload Verity.Core.PanicCode.divisionByZero.toNat) =
+      .revert { state with
+        memory := fun o =>
+          if o = 4 then 0x12
+          else if o = 0 then panicSelectorWord
+          else state.memory o } := by
+  simpa using execIRStmts_solidityPanicPayload fuel state 0x12 (by decide)
+
 end Compiler.Proofs.IRGeneration
