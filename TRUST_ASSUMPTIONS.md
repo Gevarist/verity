@@ -29,9 +29,13 @@ closed subset, resolves IDs/types/storage slots, and constructs expressions
 through explicit `translateExpr` / `translateStmt` cases. Declaration
 registration disables asynchronous kernel checking inside the transaction,
 restores the pre-import environment on failure, checks every body against its
-typed return signature, and registers safe transparent definitions. The
-frontend emits no generated Lean source and keeps no serialized AST/model
-cache.
+typed return signature, and registers safe transparent definitions. The same
+transaction registers the named storage view: `Storage` (a definition equal to
+`ContractState`), one `Storage.<var>` reader per state variable that reads
+through the imported `<var>Slot` handle, and `view : ContractState → Storage`.
+These are safe transparent `defnDecl`s like the rest; `Storage` and `view` are
+reserved Solidity names. The frontend emits no generated Lean source and keeps
+no serialized AST/model cache.
 
 The accepted fragment covers the existing Vault: full-width scalars,
 address-to-uint256 mappings and public getters, straight-line reads/writes,
@@ -49,8 +53,12 @@ withdrawal. Revert-path behaviour (nonpayability, insufficient
 shares/assets/supply, late-overflow rollback) is exercised by the acceptance
 suite, not proved here.
 
-The specification and execution proof file refer directly to the imported
-definitions. Zero-argument custom errors use Verity's `Name()` model convention;
+The specification states its promises over the imported storage view
+(`v.totalAssets`, `v.shareBalances account`) rather than raw slot numbers; the
+execution proof file relates that view to the imported definitions, and its
+internal `*_exact_state` lemmas pin the full raw post-state. The view adds no
+trust: each reader unfolds to `ContractState.readSlot`/`readMap` at the slot
+solc's storage layout assigned. Zero-argument custom errors use Verity's `Name()` model convention;
 arithmetic panic strings remain a model representation, not an assertion of
 matching EVM revert bytes. The statements do not assert full equivalence of all
 executions or all public/deployment interfaces.

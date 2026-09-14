@@ -44,7 +44,7 @@ lean_lib «VaultSolidityImporter» where
 lean_lib «VaultFromSolidity» where
   globs := #[.one `Contracts.VaultFromSolidity.VaultFromSolidity,
     .one `Contracts.VaultFromSolidity.Spec,
-    .one `Contracts.VaultFromSolidity.Proofs.Execution]
+    .one `Contracts.VaultFromSolidity.Proofs.ExecutionProof]
   needs := #[vaultSolidity, vaultLeanImporter, vaultSolc, vaultBuildPolicy]
 
 lean_lib «Contracts» where

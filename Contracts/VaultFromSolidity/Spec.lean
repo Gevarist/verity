@@ -5,17 +5,20 @@ import Contracts.VaultFromSolidity.VaultFromSolidity
 # What the imported Vault is supposed to do
 
 `Importer.lean` turns `Vault.sol` into ordinary Verity definitions: `deposit`,
-`withdraw`, `balanceOf`, and one `StorageSlot` per state variable
-(slot `0 = totalAssets`, slot `1 = totalSupply`, slot `2 = shareBalances`).
+`withdraw`, `balanceOf`, and a read-only storage view named after the Solidity
+state variables. For `v : Storage`, `v.totalAssets`, `v.totalSupply` and
+`v.shareBalances` read those variables; `view s` is the view of a state `s`.
+The storage-layout slot behind each name comes from solc, not from this file,
+so reordering the Solidity declarations does not change anything here.
 
-This file states two things about them:
+This file only states the promise:
 
 * `solvent` -- the property that matters for the contract as a whole. Shares are
   issued one-for-one against assets, so every share outstanding must stay backed
   by an asset the vault accounts for.
-* `deposit_execution` / `withdraw_execution` / `balance_execution` -- the exact
-  state each entry point produces. These pin down behaviour precisely enough to
-  derive `solvent`, and they are what a Solidity mutation has to break.
+* `deposit_spec` / `withdraw_spec` / `balanceOf_spec` -- what each entry point
+  does to the named storage, under the preconditions `depositFits` /
+  `withdrawCovered`.
 -/
 
 namespace Contracts.VaultFromSolidity.Spec
@@ -23,35 +26,43 @@ namespace Contracts.VaultFromSolidity.Spec
 open Verity
 open Verity.EVM.Uint256
 
-/-- The vault's main invariant: issued shares are exactly backed by assets
-(`totalAssets = totalSupply`). If this ever breaks, shares stop being
-redeemable one-for-one and the vault is insolvent. -/
-def solvent (s : ContractState) : Prop :=
-  s.readSlot 0 = s.readSlot 1
+/-- The vault's main invariant: issued shares are exactly backed by assets.
+If this ever breaks, shares stop being redeemable one-for-one and the vault is
+insolvent. -/
+def solvent (v : Storage) : Prop :=
+  v.totalAssets = v.totalSupply
 
-/-- Exact post-state of a successful `deposit`/`withdraw`: the caller's share
-balance and both totals move together, including Verity's ghost
-key-enumeration metadata. -/
-def accountingState (s : ContractState) (shares assets supply : Uint256) : ContractState :=
-  let mapped := { s.writeMap 2 s.sender shares with
-    knownAddresses := fun slotIdx => if slotIdx == 2 then
-      (s.knownAddresses slotIdx).insert s.sender else s.knownAddresses slotIdx }
-  (mapped.writeSlot 0 assets).writeSlot 1 supply
+/-- `deposit(amount)` credits the caller's shares and both totals by `amount`,
+and leaves every other account's shares alone. -/
+def deposit_spec (amount : Uint256) (caller : Address) (pre post : Storage) : Prop :=
+  post.totalAssets = pre.totalAssets + amount ∧
+  post.totalSupply = pre.totalSupply + amount ∧
+  post.shareBalances caller = pre.shareBalances caller + amount ∧
+  ∀ other, other ≠ caller → post.shareBalances other = pre.shareBalances other
 
-def deposit_execution (s : ContractState) (amount : Uint256) : Prop :=
-  (Contracts.VaultFromSolidity.deposit amount).run s = ContractResult.success ()
-    (accountingState s (s.readMap 2 s.sender + amount)
-      (s.readSlot 0 + amount)
-      (s.readSlot 1 + amount))
+/-- `withdraw(amount)` debits the caller's shares and both totals by `amount`,
+and leaves every other account's shares alone. -/
+def withdraw_spec (amount : Uint256) (caller : Address) (pre post : Storage) : Prop :=
+  post.totalAssets = pre.totalAssets - amount ∧
+  post.totalSupply = pre.totalSupply - amount ∧
+  post.shareBalances caller = pre.shareBalances caller - amount ∧
+  ∀ other, other ≠ caller → post.shareBalances other = pre.shareBalances other
 
-def withdraw_execution (s : ContractState) (amount : Uint256) : Prop :=
-  (Contracts.VaultFromSolidity.withdraw amount).run s = ContractResult.success ()
-    (accountingState s (s.readMap 2 s.sender - amount)
-      (s.readSlot 0 - amount)
-      (s.readSlot 1 - amount))
+/-- `balanceOf(account)` returns the account's shares. -/
+def balanceOf_spec (account : Address) (result : Uint256) (v : Storage) : Prop :=
+  result = v.shareBalances account
 
-def balance_execution (s : ContractState) (account : Address) : Prop :=
-  (Contracts.VaultFromSolidity.balanceOf account).run s =
-    ContractResult.success (s.readMap 2 account) s
+/-- A deposit of `amount` overflows none of the three counters it increments. -/
+def depositFits (amount : Uint256) (caller : Address) (v : Storage) : Prop :=
+  (v.shareBalances caller).val + amount.val ≤ Verity.Core.MAX_UINT256 ∧
+  v.totalAssets.val + amount.val ≤ Verity.Core.MAX_UINT256 ∧
+  v.totalSupply.val + amount.val ≤ Verity.Core.MAX_UINT256
+
+/-- A withdrawal of `amount` is covered by the caller's shares and both totals,
+so none of the three guards in `withdraw` reverts. -/
+def withdrawCovered (amount : Uint256) (caller : Address) (v : Storage) : Prop :=
+  amount.val ≤ (v.shareBalances caller).val ∧
+  amount.val ≤ v.totalAssets.val ∧
+  amount.val ≤ v.totalSupply.val
 
 end Contracts.VaultFromSolidity.Spec

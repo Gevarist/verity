@@ -13,8 +13,14 @@ through synthetic compiler-output mutations, plus unsupported source constructs,
 contract `layout at`,
 registered-source symlink escape, and Lean importer digest sensitivity. It also
 checks safe transparent declarations, duplicate aliases, a deliberately
-malformed late declaration and complete registration rollback, plus the pinned
-compiler's checksum. The digest scope is documented in `TRUST_ASSUMPTIONS.md`; it is not a transitive build identity.
+malformed late declaration and complete registration rollback (including the
+named storage view), plus the pinned compiler's checksum. Named-storage checks
+cover `v.totalAssets` dot notation and `#print Storage.shareBalances`, a
+declaration-reorder mutation that moves solc slots while every proof still
+builds, a state-variable rename that makes `Spec.lean` fail to elaborate, and a
+Solidity variable named `Storage` rejected with a source position. The
+`spec_named_storage` lean_lint rule (in `make check`) rejects numeric slot
+literals and `knownAddresses` in opted-in spec files. The digest scope is documented in `TRUST_ASSUMPTIONS.md`; it is not a transitive build identity.
 
 Evidence command:
 `python3 Contracts/VaultFromSolidity/Importer/scripts/solidity_importer_test.py`
