@@ -6,7 +6,7 @@ This file is the authoritative registry of axioms used by Verity proof code.
 
 `PrintAxioms.lean` includes the imported Vault execution theorems. The focused
 `solidity_importer_test.py` runs `#print axioms` in a disposable audit module for
-every theorem in `Contracts/VaultFromSolidity/Proofs/Execution.lean` and requires
+every theorem in `Contracts/VaultFromSolidity/Proofs/ExecutionProof.lean` and requires
 coverage of all declared theorems, rejecting `sorryAx` and project axioms.
 Its malformed-declaration probe also checks that kernel error recovery does not
 leave any partial declarations or fallback axioms in the import namespace.

@@ -30,9 +30,31 @@ validates and translates them directly, then registers transparent,
 kernel-checked `Verity.Contract` definitions in memory. There is no Python
 frontend, custom serialized IR, generated `.lean`, CompilationModel, or
 bytecode. The example is independent of the
-handwritten `Contracts/Vault` contract. `Spec.lean` states the vault's solvency
-invariant plus the exact post-state of each entry point, and
-`Proofs/Execution.lean` proves them against the imported definitions.
+handwritten `Contracts/Vault` contract.
+
+The importer also registers a read-only storage view named after the Solidity
+state variables, so `Spec.lean` reads like the contract instead of naming raw
+slots:
+
+```lean
+-- before
+def solvent (s : ContractState) : Prop := s.readSlot 0 = s.readSlot 1
+
+-- after
+def solvent (v : Storage) : Prop := v.totalAssets = v.totalSupply
+
+def deposit_spec (amount : Uint256) (caller : Address) (pre post : Storage) : Prop :=
+  post.totalAssets = pre.totalAssets + amount ∧
+  post.totalSupply = pre.totalSupply + amount ∧
+  post.shareBalances caller = pre.shareBalances caller + amount ∧
+  ∀ other, other ≠ caller → post.shareBalances other = pre.shareBalances other
+```
+
+Each `Storage.<var>` reader goes through the `<var>Slot` handle solc's storage
+layout produced, so reordering the Solidity declarations moves the slots without
+touching the spec, and renaming a variable makes the spec fail to elaborate.
+`Proofs/ExecutionProof.lean` proves the spec and solvency preservation against
+the imported definitions.
 
 With the Lean/package prerequisites installed, put the official Linux-amd64 solc
 0.8.33 binary at `.lake/solidity-import/solc` and make it executable. Its accepted

@@ -6,6 +6,11 @@ import Compiler.Sha256.Engine
 A proof-only Solidity frontend. This module invokes pinned `solc --standard-json`,
 validates a closed typed-AST/storage-layout subset, and directly registers safe,
 transparent Verity definitions. It emits neither an intermediate IR nor Lean source.
+
+Besides the executable model it registers a read-only storage view: `Storage` is a
+synonym for `ContractState`, `Storage.<var>` reads each state variable through its
+`<var>Slot` handle, and `view` coerces a state into it. Specs can then say
+`v.totalAssets` instead of naming a raw slot number.
 -/
 
 open Lean Meta Elab Command
@@ -324,6 +329,7 @@ private partial def validateNode (ctx : SourceContext) (j : Json) : MetaM Unit :
 
 private structure FieldInfo where
   id : Nat
+  var : String
   name : String
   getter : Option String
   slot : Nat
@@ -340,7 +346,8 @@ private structure Frontend where
 private def validName (name : String) : Bool :=
   match name.toList with
   | [] => false
-  | c :: cs => c.isAlpha && cs.all (fun c => c.isAlphanum || c == '_') && name != "sourceDigest"
+  | c :: cs => c.isAlpha && cs.all (fun c => c.isAlphanum || c == '_') &&
+      !["sourceDigest", "Storage", "view"].contains name
 
 private def identifier (ctx : SourceContext) (j : Json) : MetaM String := do
   let name ← str (← field j "name")
@@ -469,7 +476,7 @@ private def parseCompilerOutput (sourcePath : System.FilePath) (logicalPath : St
         let getter := if (← str (← field node "visibility")) == "public" then some name else none
         let slotText ← str (← field entry "slot")
         let some slot := slotText.toNat? | failAt ctx node "invalid storage slot"
-        fields := FieldInfo.mk id (name ++ "Slot") getter slot (typ.startsWith "mapping") :: fields
+        fields := FieldInfo.mk id name (name ++ "Slot") getter slot (typ.startsWith "mapping") :: fields
     | "ErrorDefinition" =>
         let ps ← arr (← field (← field node "parameters") "parameters")
         needAt ctx node ps.isEmpty "only zero-argument custom errors"
@@ -510,10 +517,10 @@ private def seq (m t : Expr) (k : Expr → MetaM Expr) : MetaM Expr :=
     let next ← k x
     mkAppM ``Verity.bind #[m, ← mkLambdaFVars #[x] next]
 
-private def register (name : Name) (value : Expr) : MetaM Unit := do
+private def register (name : Name) (value : Expr) (type? : Option Expr := none) : MetaM Unit := do
   if (← getEnv).contains name then throwError "declaration collision: {name}"
   let value ← instantiateMVars value
-  let type ← instantiateMVars (← inferType value)
+  let type ← instantiateMVars (← type?.getDM (inferType value))
   if value.hasMVar || value.hasFVar || type.hasMVar || type.hasFVar then
     throwError "unclosed imported declaration {name}"
   addDecl (.defnDecl { name, levelParams := [], type, value, hints := .regular 0, safety := .safe })
@@ -742,9 +749,10 @@ private partial def translateParams (frontend : Frontend) (params : List Json) (
 
 private def importFrontend (ns : Name) (frontend : Frontend) : MetaM Unit := do
   if debug.skipKernelTC.get (← getOptions) then throwError "kernel checking must be enabled"
-  let mut names := #[ns ++ `sourceDigest]
+  let mut names := #[ns ++ `sourceDigest, ns ++ `Storage, ns ++ `view]
   for f in frontend.fields do
     names := names.push (ns ++ Name.mkSimple f.name)
+    names := names.push (ns ++ `Storage ++ Name.mkSimple f.var)
     if let some getter := f.getter then names := names.push (ns ++ Name.mkSimple getter)
   for fn in frontend.functions do
     let name ← identifier frontend.source fn
@@ -759,6 +767,22 @@ private def importFrontend (ns : Name) (frontend : Frontend) : MetaM Unit := do
     let name := ns ++ Name.mkSimple f.name
     register name slot
     slots := (f.id, mkConst name) :: slots
+  -- Read-only named storage view. Every reader goes through the registered
+  -- `<var>Slot` handle, so `#print` shows which slot a name denotes.
+  let state := mkConst ``Verity.ContractState
+  let storageView := mkConst (ns ++ `Storage)
+  register (ns ++ `Storage) state
+  for f in frontend.fields do
+    let slot ← mkAppM ``Verity.StorageSlot.slot #[← lookupSlot slots f.id]
+    let value ← withLocalDeclD `v storageView fun v => do
+      if f.mapping then
+        withLocalDeclD `key address fun key =>
+          mkLambdaFVars #[v, key] (mkAppN (mkConst ``Verity.ContractState.readMap) #[v, slot, key])
+      else
+        mkLambdaFVars #[v] (mkAppN (mkConst ``Verity.ContractState.readSlot) #[v, slot])
+    register (ns ++ `Storage ++ Name.mkSimple f.var) value
+  let view ← withLocalDeclD `s state fun s => mkLambdaFVars #[s] s
+  register (ns ++ `view) view (some (← mkArrow state storageView))
   for f in frontend.fields do
     if let some getter := f.getter then
       let slot ← lookupSlot slots f.id
