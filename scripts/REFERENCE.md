@@ -50,7 +50,7 @@ Primary guards:
 - `generate_storage_layout_report.py`: emit the per-contract storage layout JSON artifact (`artifacts/storage_layout_report.json`) and human-readable summary (`artifacts/STORAGE_LAYOUT_SUMMARY.md`) for migration/audit review (#1897). The Lean executable `verity-storage-layout-report` is the JSON source of truth; `--check --no-lean` is the drift gate run by `make check`.
 - `check_lean_hygiene.py` (lean_lint rule `lean_hygiene`; the sorry/native_decide gate)
 - `check_proof_length.py` (lean_lint rule `proof_length`)
-- `check_spec_named_storage.py` (lean_lint rule `spec_named_storage`): opted-in human-facing specs (starting with `Contracts/VaultFromSolidity/Spec.lean`) must use named storage views, not numeric slot literals or `knownAddresses`.
+- `check_spec_named_storage.py` (lean_lint rule `spec_named_storage`): opted-in human-facing specs (starting with `Contracts/VaultFromSolidity/Spec.lean`) must use named storage views: no raw `ContractState` accessor (list read from `Verity/Core.lean`), storage field, direct `ContractState` mention, positional projection, or `knownAddresses`.
 - `check_macro_health.py`
 - `check_compiler_boundaries.py`
 - `test_check_struct_mapping_surface_sync.py`: unit coverage for the struct-mapping doc sync guard.

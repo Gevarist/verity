@@ -273,22 +273,58 @@ run_cmd do
         edit_source(original)
         build()
 
-        for name, theorem, old, new in (
-            ("deposit behavior", "deposit_exact_state", b"totalSupply += assets;", b"totalSupply = assets;"),
-            ("getter behavior", "balance_exact_state", b"return shareBalances[account];", b"return totalAssets;"),
+        def broken_theorems(output: str) -> set[str]:
+            error_lines = [int(value) for value in re.findall(
+                r"Contracts/VaultFromSolidity/Proofs/ExecutionProof\.lean:(\d+):", output)]
+            return {name for name, (start, end) in theorem_ranges.items()
+                    if any(start <= line <= end for line in error_lines)}
+
+        # A behaviour change in Vault.sol must break both the internal exact-state
+        # lemma and the human-facing `*_meets_spec` theorem. Lean adds a failed
+        # theorem with `sorry`, so a spec theorem derived from the exact-state
+        # lemma would keep elaborating; requiring an error inside its own range
+        # shows the spec layer is proved against the imported definitions itself.
+        for name, theorems, old, new in (
+            ("deposit behavior", ("deposit_exact_state", "deposit_meets_spec"),
+             b"totalSupply += assets;", b"totalSupply = assets;"),
+            ("getter behavior", ("balance_exact_state", "balance_meets_spec"),
+             b"return shareBalances[account];", b"return totalAssets;"),
         ):
             check(original.count(old) == 1, name + " mutation has one source target")
             before = artifacts()
             edit_source(original.replace(old, new))
             output = build(False, "Contracts.VaultFromSolidity.Proofs.ExecutionProof")
-            error_lines = [int(value) for value in re.findall(
-                r"Contracts/VaultFromSolidity/Proofs/ExecutionProof\.lean:(\d+):", output)]
-            start, end = theorem_ranges[theorem]
-            check(any(start <= line <= end for line in error_lines),
-                  name + f" mutation breaks {theorem}")
+            broken = broken_theorems(output)
+            for theorem in theorems:
+                check(theorem in broken, name + f" mutation breaks {theorem}")
             check(before != artifacts(), name + " preserved-mtime edit refreshes artifacts")
             edit_source(original)
             build()
+
+        # The spec layer is not vacuous: a wrong promise in Spec.lean is unprovable
+        # against the unchanged Solidity, and the failure lands in the spec
+        # theorem, not in the exact-state lemmas.
+        spec = root / "Contracts/VaultFromSolidity/Spec.lean"
+        spec_original = spec.read_bytes()
+        for name, theorem, old, new in (
+            ("deposit spec without the supply increment", "deposit_meets_spec",
+             b"post.totalSupply = pre.totalSupply + amount", b"post.totalSupply = pre.totalSupply"),
+            ("withdraw spec without the supply decrement", "withdraw_meets_spec",
+             b"post.totalSupply = pre.totalSupply - amount", b"post.totalSupply = pre.totalSupply"),
+            ("getter spec returning the wrong variable", "balance_meets_spec",
+             b"result = v.shareBalances account", b"result = v.totalSupply"),
+        ):
+            check(spec_original.count(old) == 1, name + " mutation has one spec target")
+            spec.write_bytes(spec_original.replace(old, new))
+            try:
+                output = build(False, "Contracts.VaultFromSolidity.Proofs.ExecutionProof")
+            finally:
+                spec.write_bytes(spec_original)
+            broken = broken_theorems(output)
+            check(theorem in broken, name + f" is unprovable: breaks {theorem}")
+            check(not any(candidate.endswith("_exact_state") for candidate in broken),
+                  name + " leaves the exact-state lemmas untouched")
+        build()
 
         for name, old, new, diagnostic in (
             ("contract layout at", b"contract Vault {", b"contract Vault layout at 100 {", "layout at"),

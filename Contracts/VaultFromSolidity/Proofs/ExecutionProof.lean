@@ -9,8 +9,12 @@ Three layers, deliberately kept small:
    `ContractState`, including Verity's ghost key-enumeration metadata. These
    unfold the definitions `Importer.lean` registered from `Vault.sol`, so they
    fail if the Solidity source changes behaviour.
-2. `*_meets_spec` -- the named-storage promise from `Spec`, derived from the
-   exact state.
+2. `*_meets_spec` -- the named-storage promise from `Spec`. Each states that
+   the call succeeds under its precondition and that the successful post-state
+   (or, for `balanceOf`, the returned value) satisfies the spec. These are
+   proved directly against the imported definitions, not derived from the
+   exact-state lemmas, so a behaviour change in `Vault.sol` breaks them on
+   their own.
 3. `*_preserves_solvency` -- the contract-level result. Neither a deposit nor a
    withdrawal can break the one-for-one backing between assets and issued
    shares. A reverting call leaves the state untouched (`Contract.run` rolls
@@ -70,23 +74,30 @@ theorem withdraw_exact_state (s : ContractState) (amount : Uint256)
 
 /-! ## Each entry point meets its named-storage spec -/
 
+/-- `balanceOf` succeeds, leaves the state untouched, and returns the
+account's shares as `balanceOf_spec` promises. -/
 theorem balance_meets_spec (s : ContractState) (account : Address)
     (h0 : s.msgValue = 0) :
-    balanceOf_spec account ((balanceOf account).run s).fst (view s) := by
-  rw [balance_exact_state s account h0]
-  rfl
+    ∃ result, (balanceOf account).run s = ContractResult.success result s ∧
+      balanceOf_spec account result (view s) := by
+  unfold balanceOf_spec
+  reduce_vault
 
+/-- Under `depositFits`, `deposit` succeeds and its post-state satisfies
+`deposit_spec`. -/
 theorem deposit_meets_spec (s : ContractState) (amount : Uint256)
     (h0 : s.msgValue = 0) (hfits : depositFits amount s.sender (view s)) :
-    deposit_spec amount s.sender (view s) (view ((deposit amount).run s).snd) := by
-  rw [deposit_exact_state s amount h0 hfits]
+    ∃ post, (deposit amount).run s = ContractResult.success () post ∧
+      deposit_spec amount s.sender (view s) (view post) := by
   unfold deposit_spec
   reduce_vault
 
+/-- Under `withdrawCovered`, `withdraw` succeeds and its post-state satisfies
+`withdraw_spec`. -/
 theorem withdraw_meets_spec (s : ContractState) (amount : Uint256)
     (h0 : s.msgValue = 0) (hcovered : withdrawCovered amount s.sender (view s)) :
-    withdraw_spec amount s.sender (view s) (view ((withdraw amount).run s).snd) := by
-  rw [withdraw_exact_state s amount h0 hcovered]
+    ∃ post, (withdraw amount).run s = ContractResult.success () post ∧
+      withdraw_spec amount s.sender (view s) (view post) := by
   unfold withdraw_spec
   reduce_vault
 
@@ -98,9 +109,9 @@ theorem deposit_preserves_solvency (s : ContractState) (amount : Uint256)
     (h0 : s.msgValue = 0) (hfits : depositFits amount s.sender (view s))
     (hsolvent : solvent (view s)) :
     solvent (view ((deposit amount).run s).snd) := by
-  obtain ⟨hassets, hsupply, _⟩ := deposit_meets_spec s amount h0 hfits
+  obtain ⟨post, hrun, hassets, hsupply, _⟩ := deposit_meets_spec s amount h0 hfits
   unfold solvent at hsolvent ⊢
-  rw [hassets, hsupply, hsolvent]
+  rw [hrun, ContractResult.snd_success, hassets, hsupply, hsolvent]
 
 /-- A successful withdrawal debits the caller's shares and both totals by the
 same amount, so assets still exactly back the issued shares. -/
@@ -108,8 +119,8 @@ theorem withdraw_preserves_solvency (s : ContractState) (amount : Uint256)
     (h0 : s.msgValue = 0) (hcovered : withdrawCovered amount s.sender (view s))
     (hsolvent : solvent (view s)) :
     solvent (view ((withdraw amount).run s).snd) := by
-  obtain ⟨hassets, hsupply, _⟩ := withdraw_meets_spec s amount h0 hcovered
+  obtain ⟨post, hrun, hassets, hsupply, _⟩ := withdraw_meets_spec s amount h0 hcovered
   unfold solvent at hsolvent ⊢
-  rw [hassets, hsupply, hsolvent]
+  rw [hrun, ContractResult.snd_success, hassets, hsupply, hsolvent]
 
 end Contracts.VaultFromSolidity.Proofs.ExecutionProof

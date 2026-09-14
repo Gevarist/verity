@@ -55,8 +55,11 @@ suite, not proved here.
 
 The specification states its promises over the imported storage view
 (`v.totalAssets`, `v.shareBalances account`) rather than raw slot numbers; the
-execution proof file relates that view to the imported definitions, and its
-internal `*_exact_state` lemmas pin the full raw post-state. The view adds no
+execution proof file relates that view to the imported definitions. Each
+`*_meets_spec` theorem asserts that the call succeeds under its precondition
+and that the successful post-state (or returned value) meets the spec, so a
+reverting implementation cannot satisfy it; the internal `*_exact_state` lemmas
+pin the full raw post-state. The view adds no
 trust: each reader unfolds to `ContractState.readSlot`/`readMap` at the slot
 solc's storage layout assigned. Zero-argument custom errors use Verity's `Name()` model convention;
 arithmetic panic strings remain a model representation, not an assertion of
