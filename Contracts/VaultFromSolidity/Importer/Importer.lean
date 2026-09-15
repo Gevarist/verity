@@ -758,10 +758,7 @@ private partial def translateParams (frontend : Frontend) (params : List Json) (
 private def checkCollisions (ns : Name) (frontend : Frontend) : MetaM Unit := do
   let mut names := #[
     ns ++ `sourceDigest, ns ++ `Storage, ns ++ `view, ns ++ `step,
-    ns ++ `Storage ++ `mk, ns ++ `Storage ++ `rec, ns ++ `Storage ++ `recOn,
-    ns ++ `Storage ++ `casesOn, ns ++ `Storage ++ `noConfusion,
-    ns ++ `Storage ++ `noConfusionType, ns ++ `Storage ++ `mk ++ `inj,
-    ns ++ `Storage ++ `mk ++ `injEq, ns ++ `Storage ++ `mk ++ `sizeOf_spec]
+    ns ++ `Storage ++ `mk]
   for f in frontend.fields do
     names := names.push (ns ++ Name.mkSimple f.name)
     names := names.push (ns ++ `Storage ++ Name.mkSimple f.var)
@@ -800,7 +797,6 @@ private def mkEntryDisjunct (s s' : Expr) (name : Name) (binder? : Option (Name 
     mkEq s' snd
 
 private def importFrontend (ns : Name) (frontend : Frontend) : MetaM Unit := do
-  if debug.skipKernelTC.get (← getOptions) then throwError "kernel checking must be enabled"
   let mut slots : Slots := []
   for f in frontend.fields do
     let ty ← if f.mapping then mkArrow address uint else pure uint
@@ -834,12 +830,11 @@ private def importFrontend (ns : Name) (frontend : Frontend) : MetaM Unit := do
         let value ← withLocalDeclD `account address fun account => do
           let getterFn ← mkAppM ``Verity.getMapping #[slot, account]
           mkLambdaFVars #[account] (← nonpayable getterFn)
-        let ty ← mkArrow address (← mkAppM ``Verity.Contract #[uint])
-        register gname value (some ty)
+        register gname value
         getterEntries := getterEntries.push (gname, some (`account, address))
       else
         let value ← nonpayable (← mkAppM ``Verity.getStorage #[slot])
-        register gname value (some (← mkAppM ``Verity.Contract #[uint]))
+        register gname value
         getterEntries := getterEntries.push (gname, none)
   for fn in frontend.functions do
     let name ← identifier frontend.source fn
@@ -864,16 +859,15 @@ private def importFrontend (ns : Name) (frontend : Frontend) : MetaM Unit := do
         throwError "imported body does not match typed AST return signature"
       nonpayable code
     let fname := ns ++ Name.mkSimple name
-    let retTy ← valueType returns
-    let (ty, binder?) ← if ps.size == 1 then
+    let binder? ← if ps.size == 1 then
       let p := ps[0]!
       let ptyp ← typeString p
       let pname ← identifier frontend.source p
       let dom ← valueType ptyp
-      pure (← mkArrow dom (← mkAppM ``Verity.Contract #[retTy]), some (Name.mkSimple pname, dom))
+      pure (some (Name.mkSimple pname, dom))
     else
-      pure (← mkAppM ``Verity.Contract #[retTy], none)
-    register fname value (some ty)
+      pure none
+    register fname value
     functionEntries := functionEntries.push (fname, binder?)
   let entries := functionEntries ++ getterEntries
   let step ← withLocalDeclD `s state fun s =>
@@ -929,6 +923,7 @@ syntax (name := solidityContract) "solidity_contract " ident " from " str : comm
 @[command_elab solidityContract] def elabSolidityContract : CommandElab := fun stx => do
   let saved ← getEnv
   try
+    if debug.skipKernelTC.get (← getOptions) then throwError "kernel checking must be enabled"
     let authored ← IO.FS.realPath (← getFileName)
     let source := authored.parent.getD "." / stx[3].isStrLit?.get!
     let mut root := authored.parent.getD "."
@@ -946,12 +941,6 @@ syntax (name := solidityContract) "solidity_contract " ident " from " str : comm
       elabCommand storageStx
     if (← get).messages.hasErrors then
       throwError "storage view elaboration failed"
-    liftTermElabM do
-      let some ext ← getSimpExtension? `solidity_import
-        | throwError "solidity_import simp set is not registered"
-      ext.add (SimpEntry.toUnfold (ns ++ `Storage ++ `mk)) AttributeKind.global
-      for f in frontend.fields do
-        ext.add (SimpEntry.toUnfold (ns ++ `Storage ++ Name.mkSimple f.var)) AttributeKind.global
     liftTermElabM <| withOptions (Elab.async.set · false) (importFrontend ns frontend)
   catch e =>
     setEnv saved

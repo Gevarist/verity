@@ -53,10 +53,8 @@ states. Arithmetic success premises restrict the success theorems. The example k
 readable proof set: each successful entry point meets its named-storage spec
 (`*_success_spec`), each spec holds under its precondition (`*_meets_spec`),
 and the vault's solvency invariant (`totalAssets = totalSupply`) is preserved
-by `step` (`solvent_invariant`). Revert-path behaviour (nonpayability, insufficient
-shares/assets/supply, late-overflow rollback) is covered by theorem
-`run_snd_cases` plus the success hypotheses; the acceptance suite still
-exercises those paths.
+by `step` (`solvent_invariant`). Rollback on revert is proved by `run_snd_cases`;
+the revert conditions themselves are exercised by the acceptance suite, not proved.
 
 The specification states its promises over the imported storage view
 (`v.totalAssets`, `v.shareBalances account`) rather than raw slot numbers; the

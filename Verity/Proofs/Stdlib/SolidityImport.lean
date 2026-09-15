@@ -29,18 +29,7 @@ syntax (name := soliditySimpTac)
 
 macro_rules
   | `(tactic| solidity_simp) =>
-      `(tactic| simp_all [solidity_import,
-        $(mkIdent ``Contract.run):ident, $(mkIdent ``Bind.bind):ident, $(mkIdent ``Pure.pure):ident,
-        $(mkIdent ``Verity.instMonadContract):ident, $(mkIdent ``Verity.bind):ident, $(mkIdent ``Verity.pure):ident,
-        $(mkIdent ``msgValue):ident, $(mkIdent ``msgSender):ident, $(mkIdent ``Verity.require):ident,
-        $(mkIdent ``getStorage):ident, $(mkIdent ``setStorage):ident, $(mkIdent ``getMapping):ident,
-        $(mkIdent ``setMapping):ident, $(mkIdent ``Verity.Stdlib.Math.requireSomeUint):ident,
-        $(mkIdent ``Verity.Stdlib.Math.safeAdd):ident, $(mkIdent ``Verity.Stdlib.Math.safeSub):ident,
-        $(mkIdent ``Verity.EVM.Uint256.sub):ident, $(mkIdent ``Nat.not_le_of_lt):ident,
-        $(mkIdent ``Nat.not_lt_of_ge):ident, $(mkIdent ``ContractState.readSlot):ident,
-        $(mkIdent ``ContractState.writeSlot):ident, $(mkIdent ``ContractState.readMap):ident,
-        $(mkIdent ``ContractState.writeMap):ident, $(mkIdent ``ContractState.storage):ident,
-        $(mkIdent ``ContractState.storageMap):ident, $(mkIdent ``uint256_eq_zero_iff):ident])
+      `(tactic| solidity_simp [])
   | `(tactic| solidity_simp [$args,*]) =>
       `(tactic| simp_all [solidity_import,
         $(mkIdent ``Contract.run):ident, $(mkIdent ``Bind.bind):ident, $(mkIdent ``Pure.pure):ident,

@@ -159,7 +159,7 @@ solidity_contract Vault from "Vault.sol"
         check(set(theorem_names) == {name for name, _ in entries},
               "every theorem appears in actual #print axioms output")
         axioms = {a.strip() for _, values in entries for a in values.split(",") if a.strip()}
-        check(axioms <= {"propext", "Quot.sound", "Classical.choice"},
+        check(axioms <= {"propext", "Quot.sound"},
               "no project axioms or sorryAx: " + ", ".join(sorted(axioms)))
 
         probe = root / ".lake/solidity-import/RegistrationProbe.lean"
@@ -294,11 +294,14 @@ run_cmd do
         # theorem with `sorry`, so a spec theorem derived from the success
         # lemma would keep elaborating; requiring an error inside its own range
         # shows the spec layer is proved against the imported definitions itself.
+        mint = b"    function mint(uint256 a) external { totalSupply += a; }\n"
+        old_balance = b"    function balanceOf(address account) external view returns (uint256) {"
         for name, theorems, old, new in (
             ("deposit behavior", ("deposit_success_spec", "deposit_meets_spec"),
              b"totalSupply += assets;", b"totalSupply = assets;"),
             ("getter behavior", ("balance_success_spec", "balance_meets_spec"),
              b"return shareBalances[account];", b"return totalAssets;"),
+            ("new entry point", ("solvent_invariant",), old_balance, mint + old_balance),
         ):
             check(original.count(old) == 1, name + " mutation has one source target")
             before = artifacts()
@@ -311,17 +314,6 @@ run_cmd do
             edit_source(original)
             build()
 
-        mint = b"    function mint(uint256 a) external { totalSupply += a; }\n"
-        old_balance = b"    function balanceOf(address account) external view returns (uint256) {"
-        check(original.count(old_balance) == 1, "new entry point mutation has one source target")
-        before = artifacts()
-        edit_source(original.replace(old_balance, mint + old_balance))
-        output = build(False, "Contracts.VaultFromSolidity.Proofs.ExecutionProof")
-        broken = broken_theorems(output)
-        check("solvent_invariant" in broken, "new entry point breaks solvency")
-        check(before != artifacts(), "new entry point preserved-mtime edit refreshes artifacts")
-        edit_source(original)
-        build()
 
         # The spec layer is not vacuous: a wrong promise in Spec.lean is unprovable
         # against the unchanged Solidity, and the failure lands in both the
