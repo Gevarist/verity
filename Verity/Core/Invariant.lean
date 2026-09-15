@@ -42,6 +42,21 @@ theorem and {σ : Type} {InvA InvB : σ → Prop} {f : σ → σ}
 
 end Preserves
 
+/-- An invariant `Inv` is preserved by a binary step relation `R`. -/
+def PreservedBy {σ : Type} (Inv : σ → Prop) (R : σ → σ → Prop) : Prop :=
+  ∀ s s', Inv s → R s s' → Inv s'
+
+/-- Finite `R`-reachability from a starting state `s₀`. -/
+inductive Reachable {σ : Type} (R : σ → σ → Prop) (s₀ : σ) : σ → Prop where
+  | refl : Reachable R s₀ s₀
+  | step {s s' : σ} : Reachable R s₀ s → R s s' → Reachable R s₀ s'
+
+theorem PreservedBy.reachable {σ : Type} {Inv : σ → Prop} {R : σ → σ → Prop}
+    (h : PreservedBy Inv R) {s₀ s : σ} (h₀ : Inv s₀) (hr : Reachable R s₀ s) : Inv s := by
+  induction hr with
+  | refl => exact h₀
+  | step _ hstep ih => exact h _ _ ih hstep
+
 /-- A reentrant adversary as a finite *schedule* of picked entrypoints, applied
     left to right. A bounded call depth is exactly a finite list; unbounded
     mutual recursion is out of scope (it is not expressible as a `List`). -/
