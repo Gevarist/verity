@@ -44,18 +44,19 @@ namespace Compiler.CompilationModel
 open Compiler
 open Compiler.Yul
 
-/-! Unsafe-Yul provenance markers and bridge.
+/-! Opaque-Yul provenance markers and bridge.
 
     `YulStmt` is deliberately a small, shared AST and does not carry source
     provenance.  These comments preserve the `Stmt.unsafeYul` boundary after
-    lowering without changing the generated EVM semantics.  The checked
-    arithmetic peephole in `Compiler.CodegenCommon` treats the marked region
-    as opaque.
+    lowering without changing the generated EVM semantics.  ECM-generated Yul
+    uses the same opaque boundary because its module-provided statements are
+    not compiler-owned checked-arithmetic output.  The checked arithmetic
+    peephole in `Compiler.CodegenCommon` treats the marked region as opaque.
 
-    Proof obligations and trust metadata live on `UnsafeYulFragment`; this
-    function is intentionally the only compiler lowering point for that escape
-    hatch.  The comment markers are provenance only and are ignored by Yul. -/
-private def escapeUnsafeYulMarkerComment : YulStmt → YulStmt
+    Proof obligations and trust metadata remain attached to
+    `UnsafeYulFragment`; the comment markers are provenance only and are
+    ignored by Yul. -/
+private def escapeOpaqueYulMarkerComment : YulStmt → YulStmt
   | YulStmt.comment text =>
       if text == UnsafeYulFragment.beginMarker || text == UnsafeYulFragment.endMarker then
         YulStmt.comment (text ++ "_raw")
@@ -63,15 +64,18 @@ private def escapeUnsafeYulMarkerComment : YulStmt → YulStmt
         YulStmt.comment text
   | stmt => stmt
 
-def unsafeYulToEVMYul (fragment : UnsafeYulFragment) : List YulStmt :=
+private def opaqueYulRegion (stmts : List YulStmt) : List YulStmt :=
   YulStmt.comment UnsafeYulFragment.beginMarker ::
-    fragment.stmts.map escapeUnsafeYulMarkerComment ++
+    stmts.map escapeOpaqueYulMarkerComment ++
     [YulStmt.comment UnsafeYulFragment.endMarker]
+
+def unsafeYulToEVMYul (fragment : UnsafeYulFragment) : List YulStmt :=
+  opaqueYulRegion fragment.stmts
 
 theorem unsafeYulToEVMYul_eq (fragment : UnsafeYulFragment) :
     unsafeYulToEVMYul fragment =
       YulStmt.comment UnsafeYulFragment.beginMarker ::
-        fragment.stmts.map escapeUnsafeYulMarkerComment ++
+        fragment.stmts.map escapeOpaqueYulMarkerComment ++
         [YulStmt.comment UnsafeYulFragment.endMarker] := rfl
 
 private def compileAdtStorageWrite (fields : List Field)
@@ -433,7 +437,8 @@ def compileStmtWithFork (fields : List Field) (events : List EventDef := [])
       let ctx : ECM.CompilationContext := {
         isDynamicFromCalldata := dynamicSource == .calldata
       }
-      mod.compile ctx compiledArgs
+      let generated ← mod.compile ctx compiledArgs
+      pure (opaqueYulRegion generated)
   | Stmt.returnValues values => do
       if isInternal then
         if values.length != internalRetNames.length then

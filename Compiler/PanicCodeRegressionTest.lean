@@ -214,4 +214,27 @@ def unsafeYulArithmeticPairRemainsOpaque : Bool :=
 
 example : unsafeYulArithmeticPairRemainsOpaque = true := by native_decide
 
+private def sideEffectingEcmLookalike : Compiler.ECM.ExternalCallModule where
+  name := "sideEffectingEcmLookalike"
+  numArgs := 0
+  resultVars := ["result"]
+  writesState := true
+  readsState := true
+  compile := fun _ctx _args =>
+    let lhs := YulExpr.call "bump" []
+    let rhs := YulExpr.lit 2
+    let failCond := YulExpr.call "lt" [YulExpr.call "add" [lhs, rhs], lhs]
+    pure [
+      YulStmt.if_ failCond (solidityPanicPayload 0x11),
+      YulStmt.let_ "result" (YulExpr.call "add" [lhs, rhs])
+    ]
+
+def ecmArithmeticLookalikeRemainsOpaque : Bool :=
+  match compileStmt [] [] [] .calldata [] false [] []
+      (Stmt.ecm sideEffectingEcmLookalike []) with
+  | .ok lowered => optimizeCheckedArithmeticRuntime lowered == lowered
+  | .error _ => false
+
+example : ecmArithmeticLookalikeRemainsOpaque = true := by native_decide
+
 end Compiler.PanicCodeRegressionTest
