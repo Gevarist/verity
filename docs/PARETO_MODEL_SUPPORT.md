@@ -52,12 +52,22 @@ guard, or to `sdiv`/`smod` with divide-by-zero and `minValue / -1` guards.
 The panic codes match the unsigned wrappers: `Panic(0x11)` overflow,
 `Panic(0x12)` division by zero.
 
+**Proofs.** Option-level success/failure is definitional in
+`Verity/Core/Int256.lean`. Wrapping ≡ unbounded `Int` on the success side
+is in `Verity/Proofs/Stdlib/Int256.lean` (mathlib): two's-complement
+residues modulo `2^256` are unique in range, so `add`/`sub`/`mul`/`neg`
+agree with `Int` exactly when the mathematical result is in range.
+`divPanic`/`modPanic` success is `Int.tdiv`/`Int.tmod` (towards-zero,
+sign-of-dividend remainder). No `sorry`, no new axioms.
+
 **Alternative considered.** Putting the `Contract` wrappers in
 `Verity/Core/Int256.lean` would import the `Contract` monad into the core
 numeric module (circular with `Verity.Core`). Option-level `*Panic` lives
 in `Int256.lean`; `Contract` wrappers live next to the unsigned ones in
 `Verity.Stdlib.Math` and dispatch through small typeclasses so the source
-spelling stays `addPanic`.
+spelling stays `addPanic`. Heavy wrapping proofs live under
+`Verity.Proofs.Stdlib` rather than Core so the numeric module stays
+mathlib-free.
 
 ## Feature 2: modeled-callee calls (planned)
 
