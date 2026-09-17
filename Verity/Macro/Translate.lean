@@ -3891,6 +3891,7 @@ structure ParsedContractSyntax where
   constDecls : Array ConstantDecl
   immutableDecls : Array ImmutableDecl
   interfaceDecls : Array InterfaceDecl
+  linkedContracts : Array LinkedContractDecl := #[]
   externalDecls : Array ExternalDecl
   ctor : Option ConstructorDecl
   modifiers : Array ModifierDecl
@@ -4185,6 +4186,7 @@ private def flattenSingleInheritance
     constDecls := parent.constDecls ++ child.constDecls
     immutableDecls := inheritedImmutables ++ child.immutableDecls
     interfaceDecls := parent.interfaceDecls ++ child.interfaceDecls
+    linkedContracts := parent.linkedContracts ++ child.linkedContracts
     externalDecls := parent.externalDecls ++ child.externalDecls
     ctor := ctor
     modifiers := parent.modifiers ++ child.modifiers
@@ -4600,7 +4602,7 @@ partial def parseContractSyntax
     (stx : Syntax)
     : CommandElabM ParsedContractSyntax := do
   match stx with
-  | `(command| verity_contract $contractName:ident $[is $parentName:ident]? $[include $[$includeNames:ident],*]? where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$entrypoints:veritySpecialEntrypoint]* $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*) =>
+  | `(command| verity_contract $contractName:ident $[is $parentName:ident]? $[include $[$includeNames:ident],*]? where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_contracts $[$linkedDecls:verityLinkedContract]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$entrypoints:veritySpecialEntrypoint]* $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*) =>
       let includeIdents : Array Ident :=
         match includeNames with
         | some ids => ids
@@ -4746,6 +4748,30 @@ partial def parseContractSyntax
         if seenInterfaceNames.contains ifaceLocalName then
           throwErrorAt iface.ident s!"duplicate interface name '{ifaceLocalName}'"
         seenInterfaceNames := seenInterfaceNames.push ifaceLocalName
+      let parsedLinkedContracts ←
+        match linkedDecls with
+        | some decls => decls.mapM parseLinkedContract
+        | none => pure #[]
+      let availableInterfaceNames := seenInterfaceNames
+      let mut seenLinkedNames : Array String := parent?.map (fun p =>
+        p.linkedContracts.map (·.name)) |>.getD #[]
+      for binding in parsedLinkedContracts do
+        if seenLinkedNames.contains binding.name then
+          throwErrorAt binding.ident s!"duplicate linked_contracts name '{binding.name}'"
+        unless availableInterfaceNames.contains binding.interfaceName ||
+            availableInterfaceNames.contains (localDeclName binding.interfaceName) do
+          throwErrorAt binding.interfaceIdent
+            s!"linked_contracts '{binding.name}' refers to unknown interface '{binding.interfaceName}'"
+        let calleeCandidates := [currentNs ++ binding.calleeIdent.getId, binding.calleeIdent.getId]
+        let mut foundCallee := false
+        for candidate in calleeCandidates do
+          if !foundCallee then
+            if (← lookupContractSyntax candidate).isSome then
+              foundCallee := true
+        unless foundCallee do
+          throwErrorAt binding.calleeIdent
+            s!"linked_contracts '{binding.name}' refers to unknown contract '{binding.calleeName}'; declare the callee before the caller"
+        seenLinkedNames := seenLinkedNames.push binding.name
       let inheritedInterfaceNames := parent?.map (fun p =>
         p.interfaceDecls.map (·.name)) |>.getD #[]
       let interfaceNames := inheritedInterfaceNames ++ parsedInterfaces.map (·.name)
@@ -4861,6 +4887,7 @@ partial def parseContractSyntax
         constDecls := parsedConstants
         immutableDecls := parsedImmutables
         interfaceDecls := parsedInterfaces
+        linkedContracts := parsedLinkedContracts
         externalDecls := parsedExternals
         ctor := (← ctor.mapM fun ctorStx => do
           guardEnumConstructor (← parseConstructor typeNewtypes typeStructs typeAdts ctorStx))
@@ -4879,9 +4906,9 @@ partial def parseContractSyntax
             pure { own with functions := (← inlineModifierPrefixes own.modifiers own.functions) }
           else
             finishIncludeContract currentNs includeIdents own
-  | `(command| verity_mixin $contractName:ident where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*) =>
+  | `(command| verity_mixin $contractName:ident where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_contracts $[$linkedDecls:verityLinkedContract]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*) =>
       -- Reuse the contract parser by wrapping mixin syntax as a contract with no parent/includes/entrypoints.
-      let wrapped ← `(command| verity_contract $contractName:ident where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*)
+      let wrapped ← `(command| verity_contract $contractName:ident where $[types $[$newtypeDecls:verityNewtype]*]? $[enums $[$enumDecls:verityEnumDecl]*]? $[inductive $[$adtDecls:verityAdtDecl]*]? $[$nsSpec:verityNamespaceSpec]? storage $[$storageItems:verityStorageItem]* $[roles $[$roleDecls:verityRoleDecl]*]? $[$structDecls:verityStructDecl]* $[errors $[$errorDecls:verityError]*]? $[event_defs $[$eventDecls:verityEvent]*]? $[constants $[$constantDecls:verityConstant]*]? $[immutables $[$immutableDecls:verityImmutable]*]? $[interfaces $[$interfaceDecls:verityInterface]*]? $[linked_contracts $[$linkedDecls:verityLinkedContract]*]? $[linked_externals $[$externalDecls:verityExternal]*]? $[$ctor:verityConstructor]? $[$modifierDecls:verityModifier]* $[$functions:verityFunction]*)
       let parsed ← parseContractSyntax wrapped
       pure { parsed with isMixin := true }
   | _ => throwErrorAt stx "invalid verity_contract declaration"

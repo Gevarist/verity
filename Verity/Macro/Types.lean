@@ -266,6 +266,16 @@ structure InterfaceDecl where
   name : String
   functions : Array InterfaceFunctionDecl
 
+/-- Model-plane binding of an interface-typed name to a modeled `verity_contract`.
+    Compilation-model lowering is unchanged (ABI/ECM). -/
+structure LinkedContractDecl where
+  ident : Ident
+  name : String
+  interfaceName : String
+  interfaceIdent : Ident
+  calleeName : String
+  calleeIdent : Ident
+
 structure ModifierDecl where
   ident : Ident
   name : String

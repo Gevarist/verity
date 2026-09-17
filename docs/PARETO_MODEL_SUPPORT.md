@@ -69,18 +69,42 @@ spelling stays `addPanic`. Heavy wrapping proofs live under
 `Verity.Proofs.Stdlib` rather than Core so the numeric module stays
 mathlib-free.
 
-## Feature 2: modeled-callee calls (planned)
+## Feature 2: modeled-callee calls
 
-Preferred shape: a `linked_contracts` section binding an interface-typed
-value to a modeled `verity_contract`, e.g.
+**Syntax.** Keep the existing `interfaces` block. Add a binding:
 
 ```
 linked_contracts strategy : IStrategy := IdleCreditVault
 ```
 
-Existing `interfaces` grammar is unchanged. Semantics: a hop in
-`Verity.MultiContract.MultiWorld`. Compilation-model lowering stays an ABI
-call; the binding is a model-level assumption (see `TRUST_ASSUMPTIONS.md`).
+The name may also match an interface-typed storage field or parameter.
+The callee contract must already be declared. Duplicate binding names fail
+closed.
+
+**Model plane.** A bound call is a CALL-shaped hop in
+`Verity.MultiContract.MultiWorld` (`Verity/Core/Model/ModeledCall.lean`):
+install `sender := caller.thisAddress`, `thisAddress := callee`,
+`msgValue := 0`, empty returndata; run the callee body against the callee
+account; success commits callee storage and journals the caller; revert
+restores the pre-call world and bubbles. `view` hops run the body and
+discard callee writes.
+
+The `Contract` monad still carries one `ContractState`. Cross-contract
+hops are a MultiWorld state transformer (`hop` / `hopContract`), not a
+second world type and not a field on `ContractState` (that would break
+EVMYulLean exhaustive matches). Same-contract `this.f(...)` uses
+`Contract.selfCall` (new frame, sender replaced) so try/catch can wrap it.
+That is distinct from DELEGATECALL `selfDelegateEntry`.
+
+**Compilation model.** Bound calls still lower to the existing interface
+ABI/ECM shape (`oracleSummary` / `externalCallWithReturn`). The binding is
+a model-level assumption that the address holds the named contract; no
+bytecode claim (see `TRUST_ASSUMPTIONS.md`).
+
+**Alternative considered.** Putting `MultiWorld` inside `ContractState`
+(world field) or namespacing peer storage onto `StorageKey.contractSlot`.
+Rejected as more invasive than a hop combinator over the existing
+multi-contract world.
 
 ## Feature 3: real try/catch (planned)
 

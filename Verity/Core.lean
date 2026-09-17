@@ -1457,6 +1457,23 @@ def Contract.tryCatch {α : Type} (attempt : Contract α) (handler : String → 
     | ContractResult.success _ s' => ContractResult.success () s'
     | ContractResult.revert msg rollback => handler msg rollback
 
+/-- CALL-shaped same-contract hop (`this.f(...)`). Installs a new frame with
+    `sender := thisAddress`, `msgValue := 0`, and empty returndata. Success
+    commits callee storage and pops the frame (caller `sender`/`this`/`msgValue`
+    restored). Revert restores the pre-call snapshot so an enclosing try/catch
+    can handle it. Distinct from DELEGATECALL (`selfDelegateEntry`). -/
+def Contract.selfCall {α : Type} (body : Contract α) : Contract α := fun s =>
+  let snapSender := s.sender
+  let snapThis := s.thisAddress
+  let snapValue := s.msgValue
+  let entry : ContractState :=
+    { s with sender := snapThis, msgValue := 0, returndata := [] }
+  match body entry with
+  | ContractResult.success v s' =>
+      ContractResult.success v
+        { s' with sender := snapSender, thisAddress := snapThis, msgValue := snapValue }
+  | ContractResult.revert msg _ => ContractResult.revert msg s
+
 set_option warning.simp.varHead false in
 @[simp] theorem Contract.eq_of_run_success {α : Type} {c : Contract α} {s : ContractState}
     {a : α} {s' : ContractState} (h : c.run s = ContractResult.success a s') :

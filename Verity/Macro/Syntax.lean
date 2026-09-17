@@ -23,6 +23,7 @@ declare_syntax_cat verityExternalLinkMode
 declare_syntax_cat verityInterface
 declare_syntax_cat verityInterfaceFunction
 declare_syntax_cat verityInterfaceParam
+declare_syntax_cat verityLinkedContract
 declare_syntax_cat verityLocalObligation
 declare_syntax_cat verityLocalObligations
 declare_syntax_cat verityConstructor
@@ -91,6 +92,7 @@ syntax "function " ident " (" sepBy(term, ",") ")" verityMutability* : verityInt
 syntax "function " ident "(" sepBy(verityInterfaceParam, ",") ")" verityMutability* : verityInterfaceFunction
 syntax "function " ident " (" sepBy(verityInterfaceParam, ",") ")" verityMutability* : verityInterfaceFunction
 syntax "interface " ident " where " verityInterfaceFunction* "end" : verityInterface
+syntax ident " : " ident " := " ident : verityLinkedContract
 syntax ident " := " ident ppSpace str : verityLocalObligation
 syntax "local_obligations " "[" sepBy(verityLocalObligation, ",") "]" : verityLocalObligations
 syntax "payable" : verityMutability
@@ -239,6 +241,7 @@ syntax (name := verityContractCmd)
   ("constants " verityConstant+)?
   ("immutables " verityImmutable+)?
   ("interfaces " verityInterface+)?
+  ("linked_contracts " verityLinkedContract+)?
   ("linked_externals " verityExternal+)?
   (verityConstructor)?
   (veritySpecialEntrypoint)*
@@ -259,6 +262,7 @@ syntax (name := verityMixinCmd)
   ("constants " verityConstant+)?
   ("immutables " verityImmutable+)?
   ("interfaces " verityInterface+)?
+  ("linked_contracts " verityLinkedContract+)?
   ("linked_externals " verityExternal+)?
   (verityConstructor)?
   (verityModifier)*
