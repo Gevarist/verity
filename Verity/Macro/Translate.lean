@@ -77,6 +77,11 @@ private partial def validateDoSeqExprTypes
       pure ()
   | _ => throwErrorAt doSeq "unsupported branch body; expected do-sequence"
 
+private partial def expectDoBlock (stx : Term) : CommandElabM DoSeq := do
+  match stripParens stx with
+  | `(term| do $body:doSeq) => pure body
+  | _ => throwErrorAt stx "tryCall branch must be a do block"
+
 private partial def validateDoElemsExprTypes
     (ownerName : String)
     (returnTy : ValueType)
@@ -314,6 +319,19 @@ private partial def validateDoElemExprTypes
           let (payloadName?, catchElems) ← parseTryCatchHandler handler
           validateTryCatchHandlerDoesNotUsePayload handler payloadName? catchElems
           let _ ← validateDoElemsExprTypes ownerName returnTy fields constDecls immutableDecls externalDecls errorDecls eventDecls functions params locals catchElems
+          pure locals
+      | `(doElem| tryCall $attempt:term then $succ:term catch $fail:term) => do
+          match stripParens attempt with
+          | `(term| selfCall $fn:ident) =>
+              unless functions.any (fun f => f.name == toString fn.getId) do
+                throwErrorAt fn s!"selfCall '{fn.getId}' does not name a function of this contract"
+          | _ =>
+              requireWordLikeType attempt "try attempt"
+                (← inferPureExprType fields constDecls immutableDecls externalDecls params locals attempt)
+          let succSeq ← expectDoBlock succ
+          let failSeq ← expectDoBlock fail
+          validateDoSeqExprTypes ownerName returnTy fields constDecls immutableDecls externalDecls errorDecls eventDecls functions params locals succSeq
+          validateDoSeqExprTypes ownerName returnTy fields constDecls immutableDecls externalDecls errorDecls eventDecls functions params locals failSeq
           pure locals
       | `(doElem| unsafe $_reason:str do $body:doSeq) =>
           validateDoSeqExprTypes ownerName returnTy fields constDecls immutableDecls externalDecls errorDecls eventDecls functions params locals body
@@ -1667,6 +1685,40 @@ private partial def translateDoElem
             ],
             locals,
             mutableLocals)
+      | `(doElem| tryCall $attempt:term then $succ:term catch $fail:term) => do
+          let trySuccessName :=
+            freshSyntheticLocalName "verity_try_success" params locals mutableLocals
+          let attemptExpr ←
+            match stripParens attempt with
+            | `(term| selfCall $_fn:ident) =>
+                -- CALL-with-status to this (empty calldata). Selector encoding of
+                -- the named function is a documented compilation-model gap.
+                `(Compiler.CompilationModel.Expr.call
+                    (Compiler.CompilationModel.Expr.literal 0)
+                    Compiler.CompilationModel.Expr.contractAddress
+                    (Compiler.CompilationModel.Expr.literal 0)
+                    (Compiler.CompilationModel.Expr.literal 0)
+                    (Compiler.CompilationModel.Expr.literal 0)
+                    (Compiler.CompilationModel.Expr.literal 0)
+                    (Compiler.CompilationModel.Expr.literal 0))
+            | _ =>
+                translateDeclaredPureExpr fields constDecls immutableDecls externalDecls params locals attempt
+          let succSeq ← expectDoBlock succ
+          let failSeq ← expectDoBlock fail
+          let succStmts ← translateDoSeqToStmtTerms fields constDecls immutableDecls externalDecls errorDecls functions returnTy params locals mutableLocals succSeq
+          let failStmts ← translateDoSeqToStmtTerms fields constDecls immutableDecls externalDecls errorDecls functions returnTy params locals mutableLocals failSeq
+          pure
+            (#[
+              (← `(Compiler.CompilationModel.Stmt.letVar $(strTerm trySuccessName) $attemptExpr)),
+              (← `(Compiler.CompilationModel.Stmt.ite
+                    (Compiler.CompilationModel.Expr.eq
+                      (Compiler.CompilationModel.Expr.localVar $(strTerm trySuccessName))
+                      (Compiler.CompilationModel.Expr.literal 0))
+                    [ $[$failStmts],* ]
+                    [ $[$succStmts],* ]))
+            ],
+            locals,
+            mutableLocals)
       | `(doElem| forEach $name:term $count:term $body:term) =>
           let loopVar := ← expectStringOrIdent name
           let countExpr ← translateDeclaredPureExpr fields constDecls immutableDecls externalDecls params locals count
@@ -2172,6 +2224,21 @@ private partial def rewriteForEachExecutableDoElem
       | _ =>
           throwErrorAt handler
             "tryCatch handler must be `fun _ => do ...` or a direct `do ...` block"
+  | `(doElem| tryCall $attempt:term then $succ:term catch $fail:term) => do
+      let succSeq ← expectDoBlock succ
+      let failSeq ← expectDoBlock fail
+      let succ ← rewriteForEachExecutableDoSeq fields externalDecls params locals succSeq
+      let fail ← rewriteForEachExecutableDoSeq fields externalDecls params locals failSeq
+      let attemptLean ←
+        match stripParens attempt with
+        | `(term| selfCall $fn:ident) =>
+            `(term| _root_.Verity.Contract.selfCall $fn)
+        | _ =>
+            `(term| (pure $attempt : _root_.Verity.Contract Uint256))
+      pure (#[← `(doElem|
+        _root_.Verity.Contract.tryWith $attemptLean
+          (fun _ => do $succ)
+          (fun _ => do $fail))], locals)
   | `(doElem| unsafe $_reason:str do $body:doSeq) =>
       let body ← rewriteForEachExecutableDoSeq fields externalDecls params locals body
       pure (#[← `(doElem| do $body)], locals)

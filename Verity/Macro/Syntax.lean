@@ -131,6 +131,10 @@ syntax "fork_if_at_least " ident ppSpace "then " term:max ppSpace "else " term:m
 syntax "adt " str : term
 syntax "adt " str " [" sepBy(term, ",") "]" : term
 syntax "tryCatch " term:max ppSpace term:max : doElem
+/-- Modeled hop try/catch. `tryCatch` remains the word-level stub. -/
+syntax (name := verityTryWith)
+  "tryCall " term:max " then " term:max " catch " term:max : doElem
+syntax "selfCall " ident : term
 
 -- Explicit function-body spellings for the P0 low-level interaction surface.
 -- `callExternal` is declaration-driven; `evmCall`/`evmStaticCall` expose the

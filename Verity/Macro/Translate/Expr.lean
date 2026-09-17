@@ -2157,6 +2157,8 @@ partial def inferPureExprType
   -- computed during contract translation, so the result is unconditionally
   -- a `uint256` regardless of the literal content.
   | `(term| keccakString $_s:str) => pure .uint256
+  | `(term| selfCall $_fn:ident) =>
+      pure .uint256
   | `(term| call $gas $target $value $inOffset $inSize $outOffset $outSize) => do
       for arg in [gas, target, value, inOffset, inSize, outOffset, outSize] do
         requireWordLikeType arg "low-level call" (← inferPureExprType fields constDecls immutableDecls externalDecls params locals arg visitingConstants)
@@ -3599,6 +3601,15 @@ partial def translatePureExprWithTypes
   | `(term| keccakString $s:str) =>
       let digest := KeccakEngine.keccak256_str_nat s.getString
       `(Compiler.CompilationModel.Expr.literal $(natTerm digest))
+  | `(term| selfCall $_fn:ident) =>
+      `(Compiler.CompilationModel.Expr.call
+          (Compiler.CompilationModel.Expr.literal 0)
+          Compiler.CompilationModel.Expr.contractAddress
+          (Compiler.CompilationModel.Expr.literal 0)
+          (Compiler.CompilationModel.Expr.literal 0)
+          (Compiler.CompilationModel.Expr.literal 0)
+          (Compiler.CompilationModel.Expr.literal 0)
+          (Compiler.CompilationModel.Expr.literal 0))
   | `(term| call $gas $target $value $inOffset $inSize $outOffset $outSize) =>
       `(Compiler.CompilationModel.Expr.call
           $(← translatePureExprWithTypes fields constDecls immutableDecls params locals gas visitingConstants linkedExternalLowerer?)

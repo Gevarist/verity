@@ -106,11 +106,37 @@ bytecode claim (see `TRUST_ASSUMPTIONS.md`).
 Rejected as more invasive than a hop combinator over the existing
 multi-contract world.
 
-## Feature 3: real try/catch (planned)
+## Feature 3: real try/catch
 
-Replace the `tryCatch` stub with a construct over a modeled call or
-self-call. On revert the handler starts from the pre-call snapshot; a
-revert inside the success continuation is not caught.
+**Syntax.**
+
+```
+tryCall (selfCall failHop) then
+  (do setStorage last 1)
+catch
+  (do setStorage last 2)
+```
+
+`tryCatch attempt handler` remains the word-level stub (`tryCatchWord`
+branches on `attempt == 0`) so existing low-level `call(...)` tests keep
+working. Prefer `try`/`selfCall` for modeled hops.
+
+**Model plane.** `Contract.tryWith` runs the attempt with `Contract.run`
+snapshot rollback. On revert the failure continuation starts at that
+snapshot. On success the success continuation runs from the hop's
+post-state; a revert there is **not** caught. Failed-call returndata is
+not bound into the handler (same compilation-model gap as `tryCatch`
+payload names); read `ContractState.returndata` if needed.
+
+**Compilation model.** `selfCall f` lowers to `Expr.call` targeting
+`contractAddress` (CALL-with-status to this, empty calldata). The `try`
+form is `let successBit := call(...); ite (successBit == 0) failure success`.
+Selector/ABI encoding of `f` is a documented gap; the status-bearing CALL
+plus conditional matches `docs/REVERT_STATE_MODEL.md` bubbling (failure
+does not revert the outer frame).
+
+**Alternative considered.** Replacing `tryCatch` in place would break
+`LowLevelTryCatchSmoke`. Keeping the stub as an alias is simpler.
 
 ## Feature 4: multi-parent `is A, B, C` (planned)
 
@@ -127,7 +153,8 @@ linearization; diamonds are rejected.
 3. Bind cross-contract interfaces with `linked_contracts` once Feature 2
    lands; keep unbound `interfaces` for ERC-20 tokens whose bodies are
    not modeled.
-4. Replace Solidity `try this.f(...) catch` with the Feature 3 construct.
+4. Replace Solidity `try this.f(...) catch` with
+   `tryCall (selfCall f) then (do ...) catch (do ...)`.
 5. Use `addPanic` / `subPanic` / `Int256` storage for signed price math.
 
 See `Contracts/Smoke/Arithmetic.lean` (`Int256CheckedSmoke`) for Feature 1.
