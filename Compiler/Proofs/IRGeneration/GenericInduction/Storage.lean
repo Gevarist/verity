@@ -549,7 +549,7 @@ private theorem fieldWriteEntriesAt_alias_mem
     obtain ⟨aliasIdx, halias⟩ : ∃ i, (slot, i) ∈ aliasSlots.zipIdx :=
       exists_mem_zipIdx_of_mem hmem
     cases isTransient <;> cases ty with
-    | uint256 =>
+    | uint256 | int256 =>
         simp [fieldWriteEntriesAt, firstFieldWriteSlotConflict.fieldOccupiedSlots,
           SourceSemantics.wordNormalize]
         exact Or.inr ⟨slot, ⟨aliasIdx, halias⟩, by simp [SourceSemantics.wordNormalize]⟩
