@@ -232,7 +232,7 @@ syntax (name := verityIntrinsicCmd)
   ident " := " term ";" ident "[" sepBy(verityIntrinsicObligation, ",") "]" : command
 
 syntax (name := verityContractCmd)
-  "verity_contract " ident (" is " ident)? (" include " sepBy1(ident, ","))? " where "
+  "verity_contract " ident (" is " sepBy1(ident, ","))? (" include " sepBy1(ident, ","))? " where "
   ("types " verityNewtype+)?
   ("enums " verityEnumDecl+)?
   ("inductive " verityAdtDecl+)?

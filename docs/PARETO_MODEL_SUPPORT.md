@@ -138,23 +138,45 @@ does not revert the outer frame).
 **Alternative considered.** Replacing `tryCatch` in place would break
 `LowLevelTryCatchSmoke`. Keeping the stub as an alias is simpler.
 
-## Feature 4: multi-parent `is A, B, C` (planned)
+## Feature 4: multi-parent `is A, B, C`
 
-Left-to-right flattening of the existing single-parent flatten. No C3
-linearization; diamonds are rejected.
+**Syntax.** `verity_contract Child is A, B, C where`. Single-parent `is A`
+is unchanged.
+
+**Flatten.** Left-to-right: merge sibling parents with fail-closed
+collisions, then reuse the existing single-parent flatten so the child can
+`override` a virtual from any parent. No C3 linearization.
+
+**Diamonds.** If the same ancestor is reached twice (`Child is Left, Right`
+where both inherit `Base`), elaboration fails:
+`diamond inheritance: ancestor 'Base' is reached twice (via 'Left' and 'Right')`.
+
+**Collisions.** Duplicate storage slot numbers, function signatures,
+modifiers, roles, errors, and events across sibling parents fail closed and
+name both parents.
+
+**Constructors.** The child names each parent that has a constructor, in
+`is` order: `constructor (x) A() B(x) C() := do ...`.
+
+**Alternative considered.** Solidity C3 MRO. Rejected: Pareto's chain is a
+list of mixins plus a storage parent, not a diamond, and C3 would need a
+new linearization proof story.
 
 ## How to translate an OpenZeppelin-style contract chain
 
-1. Declare each parent as its own `verity_contract` (storage-only mixins
+1. Declare each parent as its own `verity_contract` (storage-only parents
    with explicit slots, `Pausable`-like parents with modifiers, `Ownable`-like
    parents with an owner slot).
-2. Flatten with `is A, B, C` in Solidity declaration order once Feature 4
-   lands. Today, chain them one parent at a time.
-3. Bind cross-contract interfaces with `linked_contracts` once Feature 2
-   lands; keep unbound `interfaces` for ERC-20 tokens whose bodies are
-   not modeled.
+2. Flatten with `is A, B, C` in Solidity declaration order. Give each parent
+   disjoint slots; Verity rejects overlapping slot numbers instead of packing
+   them.
+3. Bind cross-contract interfaces with `linked_contracts`; keep unbound
+   `interfaces` for ERC-20 tokens whose bodies are not modeled.
 4. Replace Solidity `try this.f(...) catch` with
    `tryCall (selfCall f) then (do ...) catch (do ...)`.
 5. Use `addPanic` / `subPanic` / `Int256` storage for signed price math.
 
-See `Contracts/Smoke/Arithmetic.lean` (`Int256CheckedSmoke`) for Feature 1.
+See `Contracts/Smoke/Arithmetic.lean` (`Int256CheckedSmoke`) for Feature 1,
+`Contracts/Smoke/ModeledCall.lean` for Feature 2,
+`Contracts/Smoke/TryCatch.lean` for Feature 3, and
+`Contracts/Smoke/MultiParent.lean` (`ParetoChild`) for Feature 4.

@@ -19,6 +19,7 @@ import Contracts.Smoke.SecurityCombos
 import Contracts.Smoke.InternalInterfaceSmoke
 import Contracts.Smoke.ModeledCall
 import Contracts.Smoke.TryCatch
+import Contracts.Smoke.MultiParent
 import Contracts.Smoke.KeccakStringSmoke
 import Contracts.Smoke.MultiArgIntrinsicSmoke
 import Contracts.Smoke.EIP712StaticSmoke
