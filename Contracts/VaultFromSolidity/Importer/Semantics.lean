@@ -9,7 +9,10 @@
   Statement order matches the Solidity source order exactly, because the proofs
   pin the write order the contract produces. Internal calls evaluate arguments
   left to right, then run the callee body under the caller's `msg.sender` /
-  `msg.value`.
+  `msg.value`. `Expr.call` is `view`/`pure` only; effectful internals are
+  `Stmt.callStmt`. Pinned solc 0.8.x legacy codegen (`viaIR=false`) evaluates
+  an effectful call before the other operand / `+=` old-read, so modelling
+  those calls as left-to-right `Expr.call` would disagree with bytecode.
 -/
 
 import Contracts.VaultFromSolidity.Importer.Syntax

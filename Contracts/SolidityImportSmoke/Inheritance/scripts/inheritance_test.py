@@ -66,6 +66,11 @@ def main() -> None:
           "call meaning is in Semantics.lean")
     check("registeredSources" in importer_text and "linearizedBaseContracts" in importer_text,
           "importer accepts C3 linearization and a source manifest")
+    check("effectful internal call in expression position" in importer_text,
+          "importer rejects effectful Expr.call (legacy codegen order)")
+    check("super dispatch family mismatch" in importer_text and
+          "super dispatch disagrees with AST" not in importer_text,
+          "super follows target C3 rather than defining-contract AST id")
 
     with tempfile.TemporaryDirectory(prefix="verity-inh-check-", dir=ROOT.parent) as directory:
         root = Path(directory)
@@ -177,6 +182,28 @@ def main() -> None:
         finally:
             print_probe.unlink(missing_ok=True)
 
+        def import_only(success: bool = True, contains: str | None = None) -> str:
+            # Rebuild the importer module without Proofs.lean: diamond internals
+            # enlarge FnEnv enough that the smoke proofs' `simp` budget fails,
+            # but solc C3 super still has to elaborate.
+            return run(
+                root,
+                [LAKE, "build", "Contracts.SolidityImportSmoke.Inheritance.Inheritance"],
+                success,
+                contains,
+            )
+
+        def print_names(*names: str) -> str:
+            probe = root / ".lake/solidity-import/InhPrintNames.lean"
+            try:
+                probe.write_text(
+                    f"import {SMOKE.replace('/', '.')}.Inheritance\n"
+                    + "".join(f"#print {NS}.{name}\n" for name in names)
+                )
+                return run(root, [LAKE, "env", "lean", str(probe)])
+            finally:
+                probe.unlink(missing_ok=True)
+
         slots = slot_numbers()
         check(slots == "[0, 1, 2, 3, 4, 5]",
               "inherited slots follow solc layout [base, left, right, paused, owner, child]")
@@ -188,6 +215,59 @@ def main() -> None:
         build()
         check(slot_numbers() == "[0, 2, 1, 3, 4, 5]",
               "swapping is-order changes C3 and inherited slot numbers")
+        edit_source(original)
+        build()
+
+        diamond = original.replace(
+            b"    function _bump() internal virtual {\n        baseValue += 1;\n    }\n",
+            b"    function _bump() internal virtual {\n        baseValue += 1;\n    }\n"
+            b"    function _trace() internal virtual {}\n",
+        ).replace(
+            b"abstract contract Left is Base {\n    uint256 public leftValue;\n}\n",
+            b"abstract contract Left is Base {\n    uint256 public leftValue;\n"
+            b"    function _trace() internal virtual override { super._trace(); }\n}\n",
+        ).replace(
+            b"abstract contract Right is Base {\n    uint256 public rightValue;\n}\n",
+            b"abstract contract Right is Base {\n    uint256 public rightValue;\n"
+            b"    function _trace() internal virtual override {}\n}\n",
+        ).replace(
+            b"    function go() external {\n        _pause();\n    }\n",
+            b"    function _trace() internal override(Left, Right) { super._trace(); }\n"
+            b"    function go() external {\n        _pause();\n    }\n",
+        )
+        check(original != diamond, "diamond virtual mutation has a source target")
+        edit_source(diamond)
+        import_only()
+        diamond_printed = print_names("Child__trace", "Left__trace")
+        check("callStmt" in diamond_printed,
+              "diamond super on default is-order imports as callStmt")
+        # `is Right, Left` makes Left more derived than Right. Left._trace's AST
+        # super target is Base._trace; target C3 super is Right._trace.
+        diamond_swapped = diamond.replace(
+            b"is Left, Right, PausableLike, OwnableLike",
+            b"is Right, Left, PausableLike, OwnableLike")
+        edit_source(diamond_swapped)
+        swapped_import = import_only()
+        check("super dispatch disagrees with AST" not in swapped_import,
+              "diamond super follows target C3, not defining-contract AST id")
+        check("callStmt" in print_names("Left__trace"),
+              "#print Left__trace after diamond is-order swap still has super callStmt")
+        edit_source(original)
+        build()
+
+        sum_src = original.replace(
+            b"    function _add(uint256 a, uint256 b) internal pure returns (uint256) {\n"
+            b"        return a + b;\n    }\n",
+            b"    function _add(uint256 a, uint256 b) internal pure returns (uint256) {\n"
+            b"        return a + b;\n    }\n"
+            b"    function _sum() internal pure returns (uint256) {\n"
+            b"        return _add(1, 2);\n    }\n",
+        )
+        check(original != sum_src, "pure Expr.call mutation has a source target")
+        edit_source(sum_src)
+        import_only()
+        check("Child__add" in print_names("Child__sum"),
+              "#print Child__sum shows Expr.call of pure Child__add")
         edit_source(original)
         build()
 
@@ -267,6 +347,20 @@ def main() -> None:
              b"    function bump() external {\n        _bump();\n    }\n"
              b"    function bump(uint256 x) external {\n        baseValue = x;\n    }",
              "overloading"),
+            ("effectful add of internal call",
+             b"    function bump() external {\n        _bump();\n    }",
+             b"    function _inc() internal returns (uint256) {\n"
+             b"        childValue += 1;\n        return childValue;\n    }\n"
+             b"    function bump() external {\n"
+             b"        childValue = childValue + _inc();\n    }",
+             "effectful internal call in expression position"),
+            ("effectful compound assignment of internal call",
+             b"    function bump() external {\n        _bump();\n    }",
+             b"    function _inc() internal returns (uint256) {\n"
+             b"        childValue += 1;\n        return childValue;\n    }\n"
+             b"    function bump() external {\n"
+             b"        childValue += _inc();\n    }",
+             "effectful internal call in expression position"),
         ):
             check(original.count(old) == 1, name + " mutation has one source target")
             edit_source(original.replace(old, new))

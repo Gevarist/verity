@@ -381,6 +381,7 @@ private structure FnInfo where
   contractName : String
   name : String
   visibility : String
+  mutability : String
   virtual : Bool
   implemented : Bool
   isTarget : Bool
@@ -398,6 +399,12 @@ private def FnInfo.leanIdent (f : FnInfo) : String :=
 
 private def FnInfo.isEntry (f : FnInfo) : Bool :=
   f.implemented && (f.visibility == "public" || f.visibility == "external")
+
+/-- `view`/`pure` may appear in expression position. Nonpayable internals are
+statement-only (`Stmt.callStmt`): pinned solc 0.8.x legacy codegen evaluates
+an effectful call before the other operand / `+=` old-read. -/
+private def FnInfo.viewOrPure (f : FnInfo) : Bool :=
+  f.mutability == "view" || f.mutability == "pure"
 
 private structure Frontend where
   source : SourceContext
@@ -438,10 +445,11 @@ private def parseValueTy (ctx : SourceContext) (j : Json) : MetaM Sol.Ty := do
 private def parseFnInfo (ctx : SourceContext) (contractId : Nat) (contractName : String)
     (isTarget : Bool) (node : Json) : MetaM FnInfo := do
   let name ← identifier ctx node
+  let mutability ← str (← field node "stateMutability")
   needAt ctx node ((← str (← field node "kind")) == "function" &&
     (← arr (← field node "modifiers")).isEmpty &&
     ["internal", "public", "external", "private"].contains (← str (← field node "visibility")) &&
-    ["nonpayable", "view", "pure"].contains (← str (← field node "stateMutability")))
+    ["nonpayable", "view", "pure"].contains mutability)
     "unsupported function surface"
   let implemented ← bool (← field node "implemented")
   let virt ← bool (← field node "virtual")
@@ -482,7 +490,7 @@ private def parseFnInfo (ctx : SourceContext) (contractId : Nat) (contractName :
   pure {
     id := ← nodeId node, contractId, contractName, name,
     visibility := ← str (← field node "visibility"),
-    virtual := virt, implemented, isTarget, paramTys, paramIds, rets, namedReturn, node
+    mutability, virtual := virt, implemented, isTarget, paramTys, paramIds, rets, namedReturn, node
   }
 
 set_option maxRecDepth 2048 in
@@ -835,9 +843,16 @@ private def resolveCall (frontend : Frontend) (current : FnInfo) (call : Json) :
       needAt frontend.source callee (rid >= 0) "unresolved super target"
       let some static := lookupFn frontend rid.toNat
         | failAt frontend.source call "unresolved function reference"
+      -- solc's AST `referencedDeclaration` on `super.f` is the next override in
+      -- the *defining* contract's linearization. Runtime (and this importer)
+      -- use the *target* contract's C3 (`linearizedBaseContracts`), which
+      -- disagrees on diamonds. Follow `superTarget`; only require the AST id
+      -- to name a member of the same virtual family.
+      needAt frontend.source callee
+        ((familyOf frontend static.name static.paramTys).any (·.id == rid.toNat))
+        "super dispatch family mismatch"
       let some resolved := superTarget frontend current.contractId static.name static.paramTys
         | failAt frontend.source call "unresolved super target"
-      needAt frontend.source callee (resolved.id == rid.toNat) "super dispatch disagrees with AST"
       pure resolved
   | _ => failAt frontend.source call "unsupported call surface"
 
@@ -986,6 +1001,8 @@ private partial def parseExpr (ctx : ParseCtx) {Γ : Sol.Ctx} (sc : Scope Γ) (t
   | "FunctionCall" =>
       requireType ctx.frontend j (typeName t)
       let resolved ← resolveCall ctx.frontend ctx.current j
+      needAt ctx.frontend.source j resolved.viewOrPure
+        "effectful internal call in expression position"
       needAt ctx.frontend.source j (resolved.rets == [t]) "function does not return the expected type"
       let ⟨σ, fv⟩ ← fvarOf ctx resolved j
       let argsJ := (← arr (← field j "arguments")).toList

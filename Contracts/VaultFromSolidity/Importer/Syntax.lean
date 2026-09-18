@@ -125,8 +125,10 @@ inductive Expr (L : Layout) (F : Fns) (Γ : Ctx) : Ty → Type where
   | index : SVar L .mapping → Expr L F Γ .addr → Expr L F Γ .uint
   /-- Checked `+`/`-` on `uint256`, reverting with `Panic(0x11)`. -/
   | arith : ArithOp → Expr L F Γ .uint → Expr L F Γ .uint → Expr L F Γ .uint
-  /-- Internal call of an already-registered function that returns one value.
-  Arguments are in declaration order and evaluate left to right. -/
+  /-- Internal call of an already-registered `view`/`pure` function that
+  returns one value. Arguments are in declaration order and evaluate left
+  to right. Effectful internals are `Stmt.callStmt` only: pinned solc 0.8.x
+  legacy codegen evaluates those calls before the other operand / old-read. -/
   | call : {ts : List Ty} →
       FVar F ⟨ts.reverse, [t]⟩ → Args L F Γ ts → Expr L F Γ t
   deriving ToExpr

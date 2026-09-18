@@ -78,8 +78,9 @@ rejection, content-based Lake freshness, compiler/importer/build-policy
 invalidation, declaration-registration rollback, and an audit of every Vault
 theorem. It never mutates the original Solidity file. The inheritance smoke
 (`Contracts/SolidityImportSmoke/Inheritance`) covers same-file `is` bases, C3
-linearization including a diamond, virtual dispatch, `super`, opaque fields,
-and internal calls; `inheritance_test.py` is the matching focused suite.
+linearization including a diamond, virtual dispatch, `super` (target C3, not
+the defining-contract AST id), opaque fields, and internal calls (`Expr.call`
+is view/pure only); `inheritance_test.py` is the matching focused suite.
 Save Solidity, rebuild this dedicated target, then reload the Lean editor:
 an already-open editor snapshot does not automatically watch `.sol` changes.
 See [the trust boundary](TRUST_ASSUMPTIONS.md#proof-only-solidity-vault-import).

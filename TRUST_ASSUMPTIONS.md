@@ -54,7 +54,12 @@ full-width `uint256` scalars, `address` scalars, address-to-uint256 mappings and
 public getters, straight-line reads/writes, locals, checked addition/subtraction,
 comparison/custom-error guards, same-file `is` bases with solc's C3
 linearization (including diamonds), virtual dispatch and `super` specialized at
-import time, internal function calls, abstract bases with body-less `virtual`s,
+import time from the target's `linearizedBaseContracts` (matching 0.8.x runtime;
+the AST `referencedDeclaration` on `super` follows the defining contract and is
+not the dispatch key on diamonds), internal function calls (`Expr.call` is
+`view`/`pure` only; effectful internals are `Stmt.callStmt`, because legacy
+codegen evaluates those calls before the other operand / `+=` old-read),
+abstract bases with body-less `virtual`s,
 and opaque storage fields (slot reserved, not in `Storage`; a body that reads or
 writes one is rejected). Unknown executable constructs are rejected; this is not
 general Solidity support. Multi-file units, modifiers, packed fields, and
