@@ -24,6 +24,17 @@ the compilation model and typed IR:
   enable the checked helpers. `Stmt.unsafeYul` fragments are lowered with
   comment-only provenance markers and are optimizer-opaque, so handwritten
   Yul cannot be rewritten as a typed helper call.
+- ECM output uses separate comment boundaries and is inspected automatically,
+  without an author opt-in. Rewrites require numeric-literal or variable-reference
+  operands and the exact guard/panic/arithmetic shape. Calls remain unchanged.
+  Each emitted deployment/runtime section must contain exactly one canonical
+  definition of all four arithmetic helpers and both panic helpers, with no
+  conflicting function, local, parameter, or return binding anywhere in that
+  section. Missing or altered helpers disable the pass for that section; ECM
+  alone does not trigger helper insertion. Rewrites never cross region markers.
+  Malformed markers disable the pass; reserved ECM marker text anywhere in a
+  module's output makes that module opaque. Explicit unsafe-Yul regions remain
+  opaque, including when nested in ECM output.
 
 The direct Lean implementations in `Verity.Stdlib.Math` retain their existing
 diagnostic strings for executable/model use. Those strings are not the compiled
@@ -45,10 +56,20 @@ that the full Solidity panic-code catalog has been modeled as `PanicCode`.
 
 ## Proof and Regression Coverage
 
-- `Compiler.Proofs.IRGeneration.PanicPayloadIR` proves the selector, exact code
-  word, 36-byte revert, and preservation of all other memory for both typed
-  constructors. Its general numeric theorem continues to cover the raw payload
-  builder for every in-range code.
+- `Compiler.Proofs.IRGeneration.PanicPayloadIR` proves the abstract IR memory
+  updates at offsets `0` and `4`, preservation of other abstract memory entries,
+  and a revert result for both typed constructors and every in-range numeric
+  code. That interpreter does not retain the revert offset, length, or bytes.
+- `Compiler.Proofs.YulGeneration.PanicPayloadBytes` reads the actual emitted
+  payload AST and uses EVMYulLean's byte-addressed `mstore` and `evmRevert`
+  operations. It proves that, for any initial memory, the returned bytes are
+  exactly `[0x4e, 0x48, 0x7b, 0x71]` followed by the 32-byte code word, with
+  total length 36. The general theorem interprets numeric codes as EVM words;
+  typed specializations cover `0x11` and `0x12`. This is a proof of the local
+  panic instruction sequence, not whole-contract execution or solc bytecode.
+- Byte-level regressions check both typed payloads and distinguish empty,
+  truncated, and wrong-offset reverts. Separate characterization examples show
+  why the abstract IR result alone cannot establish this byte-level guarantee.
 - Feature tests cover all four arithmetic wrappers, both typed code mappings,
   direct typed lowering, cached raw lowering, raw runtime panic, raw enum code
   `0x21`, and mixed typed/raw Yul where only the typed pair is rewritten.

@@ -389,9 +389,30 @@ axiom**. The closed `Verity.Core.PanicCode` type maps `.arithmeticOverflow` to
 constructors through `Stmt.panic` and typed IR before converting explicitly at
 canonical `Panic(uint256)` payload lowering. General runtime panic expressions
 and generated `0x21` enum guards remain on the raw `Stmt.panicCode Expr`
-compatibility path. The exact payload has the general theorem
-`Compiler.Proofs.IRGeneration.PanicPayloadIR.execIRStmts_solidityPanicPayload`
-and typed specializations for both constructors.
+compatibility path. The abstract IR memory/revert result has the general theorem
+`Compiler.Proofs.IRGeneration.execIRStmts_solidityPanicPayload` in `PanicPayloadIR`
+and typed specializations for both constructors. That result does not observe
+the returned bytes. The byte-level theorem
+`Compiler.Proofs.YulGeneration.observePanicPayloadBytes_solidityPanicPayload`
+and its `_size` companion in `PanicPayloadBytes` prove the emitted AST returns
+the exact 36-byte payload. They use
+`Compiler.Proofs.YulGeneration.Backends.Panic.machineState_panicPayload_bytes`
+to establish the byte-addressed memory and revert result for arbitrary initial
+memory. These proofs use kernel-checked reduction, add no project-level axiom,
+and do not use `native_decide`. They cover the local panic sequence, not a
+whole-contract or solc-bytecode preservation theorem.
+The checked-arithmetic rewrite admits only numeric-literal and variable-reference
+operands; this executable safety check adds no axiom or preservation theorem.
+ECM output is automatically eligible under that operand check and exact-pattern
+matching, provided each emitted section has all six canonical helper definitions
+without duplicate or shadowing bindings. Explicit unsafe-Yul stays opaque;
+malformed markers disable rewriting and reserved ECM marker text forces opacity.
+The ECM wrapper's bridge-support lemma is kernel-checked but establishes only
+syntactic support, not semantic preservation of the optimizer. No ECM opt-in or
+additional project axiom is introduced.
+The `compiler-regressions` CI job explicitly builds `Compiler.PanicCodeRegressionTest`;
+its required workflow step is enforced by the synchronized specification. This
+adds regression enforcement, not a new axiom or semantic-preservation proof.
 The macro-shape and post-codegen rewrite regression tests use `native_decide`;
 that mechanism is reported in `artifacts/trust_surface_report.json` under the
 documented native-code trust boundary above and does not change the active

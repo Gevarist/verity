@@ -119,11 +119,25 @@ raw `Stmt.panicCode Expr` path remains for runtime codes and generated enum
 guards such as `0x21`, and retains expression caching during lowering. When the
 full checked-helper set is available, `CodegenCommon` recognizes only the exact
 typed adjacent pair and replaces it with the corresponding checked helper call.
+Both operands must be numeric literals or variable references; calls and other
+compound expressions remain unchanged so the rewrite cannot remove operand
+effects or change their evaluation order relative to the guard.
+ECM output is inspected automatically under the same rules, without an opt-in.
+Deployment and runtime are validated independently against the actual emitted
+Yul: all four arithmetic helpers and both panic helpers must occur exactly once
+at top level with canonical signatures/bodies, and no other binding may reuse
+their names. ECM alone does not insert helpers. Region comments prevent matches
+across boundaries; malformed markers disable the pass. Reserved ECM marker text
+inside module output falls back to opacity. Explicit unsafe-Yul remains opaque.
 Usage analysis likewise requires matching operands, guard, operation, and typed
 panic constructor; a standalone or raw panic cannot enable the helpers.
 Generated-model and Yul tests cover all four operations and negative matcher
-cases. `Compiler.Proofs.IRGeneration.PanicPayloadIR` proves the exact canonical
-payload emitted for every in-range code and for each typed constructor.
+cases. `Compiler.Proofs.IRGeneration.PanicPayloadIR` proves the abstract memory
+writes and revert result, which do not observe returned bytes.
+`Compiler.Proofs.YulGeneration.PanicPayloadBytes` separately proves the emitted
+panic AST returns the exact canonical 36-byte payload for any initial memory,
+using EVMYulLean's byte-addressed memory and revert operations. It includes both
+typed constructors and a general theorem interpreting numeric codes as EVM words.
 
 The direct Lean definitions of the four wrappers retain their historical
 diagnostic strings. Those messages are executable-model compatibility behavior,
@@ -206,7 +220,8 @@ The arithmetic model is invariant across profiles. See [`docs/SOLIDITY_PARITY_PR
   checks for bare arithmetic. Use the EDSL's explicit safe operations or panic
   wrappers for checked behavior.
 - **Whole-contract structured-panic preservation**: the exact panic payload is
-  proved at the IR interpreter, but typed and raw panic statements remain
+  proved for the local emitted AST using EVM memory operations, not full native
+  Yul execution or solc bytecode. Typed and raw panic statements remain
   outside the current generic `SupportedSpec` effect fragment. Independently,
   the post-codegen rewrite from the exact adjacent typed pair (together forming
   the guard/panic/arithmetic sequence) to a checked helper call is protected by

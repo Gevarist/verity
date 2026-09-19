@@ -38,6 +38,7 @@ import Compiler.CompilationModel.StorageWrites
 import Compiler.CompilationModel.Validation
 import Compiler.CompilationModel.AdtStorageLayout
 import Verity.Core.Intrinsics
+import Compiler.Yul.StatementRegions
 
 namespace Compiler.CompilationModel
 
@@ -48,10 +49,9 @@ open Compiler.Yul
 
     `YulStmt` is deliberately a small, shared AST and does not carry source
     provenance.  These comments preserve the `Stmt.unsafeYul` boundary after
-    lowering without changing the generated EVM semantics.  ECM-generated Yul
-    uses the same opaque boundary because its module-provided statements are
-    not compiler-owned checked-arithmetic output.  The checked arithmetic
-    peephole in `Compiler.CodegenCommon` treats the marked region as opaque.
+    lowering without changing the generated EVM semantics. ECM has distinct
+    markers: its arithmetic may be optimized after operand/helper validation.
+    Explicit unsafe-Yul regions remain opaque to that peephole.
 
     Proof obligations and trust metadata remain attached to
     `UnsafeYulFragment`; the comment markers are provenance only and are
@@ -68,6 +68,43 @@ private def opaqueYulRegion (stmts : List YulStmt) : List YulStmt :=
   YulStmt.comment UnsafeYulFragment.beginMarker ::
     stmts.map escapeOpaqueYulMarkerComment ++
     [YulStmt.comment UnsafeYulFragment.endMarker]
+
+/-- Opaque-region markers and comment escaping preserve any statement
+    predicate that admits arbitrary comments. -/
+theorem opaqueYulRegion_preserves (P : YulStmt → Prop)
+    (hComment : ∀ text, P (.comment text))
+    {stmts : List YulStmt} (hStmts : ∀ stmt ∈ stmts, P stmt) :
+    ∀ stmt ∈ opaqueYulRegion stmts, P stmt := by
+  intro stmt hMem
+  simp only [opaqueYulRegion, List.mem_cons, List.mem_append, List.mem_map,
+    List.not_mem_nil, or_false] at hMem
+  rcases hMem with (rfl | ⟨original, hOriginal, rfl⟩) | rfl
+  · exact hComment _
+  · cases original <;> simp only [escapeOpaqueYulMarkerComment]
+      <;> try exact hStmts _ hOriginal
+    split <;> exact hComment _
+  · exact hComment _
+
+private def ecmYulRegion (stmts : List YulStmt) : List YulStmt :=
+  if StatementRegions.containsEcmMarker stmts then opaqueYulRegion stmts
+  else
+    YulStmt.comment StatementRegions.ecmBeginMarker ::
+      stmts ++ [YulStmt.comment StatementRegions.ecmEndMarker]
+
+/-- ECM wrapping adds only comments; reserved marker text falls back to opacity. -/
+theorem ecmYulRegion_preserves (P : YulStmt → Prop)
+    (hComment : ∀ text, P (.comment text))
+    {stmts : List YulStmt} (hStmts : ∀ stmt ∈ stmts, P stmt) :
+    ∀ stmt ∈ ecmYulRegion stmts, P stmt := by
+  unfold ecmYulRegion
+  split
+  · exact opaqueYulRegion_preserves P hComment hStmts
+  · intro stmt hMem
+    simp only [List.mem_cons, List.mem_append, List.not_mem_nil, or_false] at hMem
+    rcases hMem with (rfl | hOriginal) | rfl
+    · exact hComment _
+    · exact hStmts _ hOriginal
+    · exact hComment _
 
 def unsafeYulToEVMYul (fragment : UnsafeYulFragment) : List YulStmt :=
   opaqueYulRegion fragment.stmts
@@ -438,7 +475,7 @@ def compileStmtWithFork (fields : List Field) (events : List EventDef := [])
         isDynamicFromCalldata := dynamicSource == .calldata
       }
       let generated ← mod.compile ctx compiledArgs
-      pure (opaqueYulRegion generated)
+      pure (ecmYulRegion generated)
   | Stmt.returnValues values => do
       if isInternal then
         if values.length != internalRetNames.length then
