@@ -6,13 +6,16 @@ This file is the authoritative registry of axioms used by Verity proof code.
 
 `PrintAxioms.lean` includes the imported Vault execution theorems. The focused
 `solidity_importer_test.py` runs `#print axioms` in a disposable audit module for
-every theorem in `Contracts/VaultFromSolidity/Proofs/Execution.lean` and requires
+every theorem in `Contracts/VaultFromSolidity/Proofs/ExecutionProof.lean` and requires
 coverage of all declared theorems, rejecting `sorryAx` and project axioms.
 Its malformed-declaration probe also checks that kernel error recovery does not
 leave any partial declarations or fallback axioms in the import namespace.
-The imported Vault proofs report only the standard Lean foundations `propext`,
-`Classical.choice`, and `Quot.sound`; they do not depend on `solidityMappingSlot_injective`.
-This does not remove the trusted Solidity frontend/translation boundary described
+The imported Vault proofs report only the standard Lean foundations `propext`
+and `Quot.sound`; they do not depend on `solidityMappingSlot_injective`.
+`solvent_invariant` is included in that audit. The inheritance-slice suite
+`inheritance_test.py` runs the same `#print axioms` gate on every theorem in
+`Contracts/SolidityImportSmoke/Inheritance/Proofs.lean` and likewise requires
+only `propext` and `Quot.sound`. This does not remove the trusted Solidity frontend/translation boundary described
 in `TRUST_ASSUMPTIONS.md`, or change the compiler axiom registry below.
 
 ## Policy
@@ -385,7 +388,7 @@ specification.
 
 The structured checked-arithmetic panic migration adds **no project-level
 axiom**. The closed `Verity.Core.PanicCode` type maps `.arithmeticOverflow` to
-`0x11` and `.divisionByZero` to `0x12`; checked arithmetic carries those
+`0x11` and `.divisionByZero` to `0x12`; unsigned checked arithmetic carries those
 constructors through `Stmt.panic` and typed IR before converting explicitly at
 canonical `Panic(uint256)` payload lowering. General runtime panic expressions
 and generated `0x21` enum guards remain on the raw `Stmt.panicCode Expr`

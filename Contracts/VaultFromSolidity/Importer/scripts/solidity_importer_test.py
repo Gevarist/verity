@@ -55,6 +55,10 @@ def run(root: Path, args: list[str], success: bool = True, contains: str | None 
 def main() -> None:
     importer_path = ROOT / "Contracts/VaultFromSolidity/Importer/Importer.lean"
     importer_text = importer_path.read_text()
+    syntax_path = ROOT / "Contracts/VaultFromSolidity/Importer/Syntax.lean"
+    semantics_path = ROOT / "Contracts/VaultFromSolidity/Importer/Semantics.lean"
+    syntax_text = syntax_path.read_text()
+    semantics_text = semantics_path.read_text()
     python_frontend = ROOT / "Contracts/VaultFromSolidity/Importer/scripts/solidity_importer.py"
     check(not python_frontend.exists(), "no Python importer/frontend exists")
     check("--standard-json" in importer_text and "--no-import-callback" in importer_text,
@@ -63,8 +67,12 @@ def main() -> None:
           "Lean importer enforces compiler checksum and version pin")
     check('cmd := "/usr/bin/sha256sum"' in importer_text and 'cmd := "sha256sum"' not in importer_text,
           "compiler checksum utility uses a fixed path, not PATH lookup")
-    check("translateExpr" in importer_text and "translateStmts" in importer_text,
-          "Solidity constructs have explicit Lean translation functions")
+    check("parseExpr" in importer_text and "parseStmts" in importer_text and
+          "Expr.meaning" in semantics_text and "Stmt.meaning" in semantics_text,
+          "Solidity constructs have explicit Lean parser and semantics functions")
+    check("inductive Expr" in syntax_text and "inductive Stmt" in syntax_text and
+          "inductive LVal" in syntax_text,
+          "accepted Solidity subset is the closed inductive in Syntax.lean")
     check(all(tag not in importer_text for tag in ('[\"read\"', '[\"write\"', '[\"guard\"')),
           "no custom serialized JSON IR tags")
 
@@ -132,20 +140,21 @@ solidity_contract Vault from "Vault.sol"
 #print Vault.deposit
 ''')
             ux_output = run(root, [LAKE, "env", "lean", str(ux_probe)])
-            check("def Vault.deposit" in ux_output and "Verity.setStorage" in ux_output,
-                  "documented solidity_contract Vault UX exposes #print Vault.deposit")
+            check("def Vault.deposit" in ux_output and "Sol.Fn.meaning" in ux_output and
+                  "Sol.Stmt.assign" in ux_output,
+                  "documented solidity_contract Vault UX exposes #print Vault.deposit as its parsed AST")
         finally:
             ux_probe.unlink(missing_ok=True)
 
-        proof = root / "Contracts/VaultFromSolidity/Proofs/Execution.lean"
+        proof = root / "Contracts/VaultFromSolidity/Proofs/ExecutionProof.lean"
         proof_text = proof.read_text()
         theorem_names = re.findall(r"^theorem\s+(\w+)", proof_text, re.M)
         audit_file = root / ".lake/solidity-import/AxiomAudit.lean"
         try:
             audit_file.write_text(
-                "import Contracts.VaultFromSolidity.Proofs.Execution\n"
+                "import Contracts.VaultFromSolidity.Proofs.ExecutionProof\n"
                 + "\n".join(
-                    "#print axioms Contracts.VaultFromSolidity.Proofs.Execution." + name
+                    "#print axioms Contracts.VaultFromSolidity.Proofs.ExecutionProof." + name
                     for name in theorem_names
                 )
                 + "\n"
@@ -154,24 +163,51 @@ solidity_contract Vault from "Vault.sol"
         finally:
             audit_file.unlink(missing_ok=True)
         entries = re.findall(
-            r"'Contracts.VaultFromSolidity.Proofs.Execution.(\w+)' depends on axioms: \[([^\]]*)\]", audit
+            r"'Contracts.VaultFromSolidity.Proofs.ExecutionProof.(\w+)' depends on axioms: \[([^\]]*)\]", audit
         )
         check(set(theorem_names) == {name for name, _ in entries},
               "every theorem appears in actual #print axioms output")
         axioms = {a.strip() for _, values in entries for a in values.split(",") if a.strip()}
-        check(axioms <= {"propext", "Quot.sound", "Classical.choice"},
+        check(axioms <= {"propext", "Quot.sound"},
               "no project axioms or sorryAx: " + ", ".join(sorted(axioms)))
 
         probe = root / ".lake/solidity-import/RegistrationProbe.lean"
         try:
             probe.write_text('''import Contracts.VaultFromSolidity.VaultFromSolidity
+import Contracts.VaultFromSolidity.Importer.Semantics
 open Lean Elab Command
 #print Contracts.VaultFromSolidity.deposit
+#print SolidityImporter.Sol.Fn.meaning
+#print SolidityImporter.Sol.assignWith
+#print SolidityImporter.Sol.checked
+#check fun (v : Contracts.VaultFromSolidity.Storage) => v.totalAssets
+#print Contracts.VaultFromSolidity.view
+#print Contracts.VaultFromSolidity.step
+/-- Transitive used-constant closure. A pattern-matching definition over an indexed
+family is compiled through a `.brecOn` recursor plus a `._f` companion, so the
+Verity primitives a construct unfolds to live in those companions rather than in
+the top-level constant's own body. -/
+partial def semanticsClosure (env : Environment) (roots : Array Name) : Array Name :=
+  let rec go (seen todo : Array Name) : Array Name :=
+    if todo.isEmpty then seen
+    else
+      let cur := todo.back!
+      let todo := todo.pop
+      if seen.contains cur then go seen todo
+      else
+        let seen := seen.push cur
+        let deps := match env.find? cur with
+          | some (.defnInfo i) => i.value.getUsedConstants
+          | some (.thmInfo i) => i.value.getUsedConstants
+          | _ => #[]
+        go seen (todo ++ deps)
+  go #[] roots
 run_cmd do
   for suffix in ["totalAssetsSlot", "totalSupplySlot", "shareBalancesSlot",
                  "deposit", "withdraw", "balanceOf", "totalAssets", "totalSupply",
-                 "shareBalances", "sourceDigest"] do
-    let name := `Contracts.VaultFromSolidity ++ Name.mkSimple suffix
+                 "shareBalances", "sourceDigest", "Storage.totalAssets",
+                 "Storage.totalSupply", "Storage.shareBalances", "view", "step"] do
+    let name := `Contracts.VaultFromSolidity ++ suffix.toName
     let some (.defnInfo info) := (← getEnv).find? name
       | throwError "not a transparent definition: {name}"
     unless info.safety == .safe && !info.value.hasMVar && !info.value.hasFVar do
@@ -180,11 +216,26 @@ run_cmd do
       if dep.toString.startsWith "Contracts." &&
           !dep.toString.startsWith "Contracts.VaultFromSolidity." then
         throwError "imported declaration depends on handwritten contract: {dep}"
+  let some (.inductInfo _) := (← getEnv).find? `Contracts.VaultFromSolidity.Storage
+    | throwError "Storage is not an inductive structure"
+  let some (.ctorInfo _) := (← getEnv).find? `Contracts.VaultFromSolidity.Storage.mk
+    | throwError "Storage.mk is not a constructor"
   let some (.defnInfo deposit) := (← getEnv).find? `Contracts.VaultFromSolidity.deposit
     | throwError "missing imported deposit"
-  for dep in [``Verity.setMapping, ``Verity.setStorage, ``Verity.Stdlib.Math.safeAdd] do
+  -- The imported body is the parsed Solidity AST under `Sol.Fn.meaning`, so the
+  -- constructors it uses are the source's constructs.
+  for dep in [``SolidityImporter.Sol.Fn.meaning, ``SolidityImporter.Sol.LVal.mapping,
+              ``SolidityImporter.Sol.LVal.scalar, ``SolidityImporter.Sol.AssignOp.add] do
     unless deposit.value.getUsedConstants.contains dep do
-      throwError "missing source-derived deposit operation: {dep}"
+      throwError "imported deposit does not go through the parsed AST: {dep}"
+  -- ... and that meaning still bottoms out in the Verity primitives, reached
+  -- through the semantics definitions (including their generated companions).
+  let semantics := semanticsClosure (← getEnv) #[``SolidityImporter.Sol.Fn.meaning,
+    ``SolidityImporter.Sol.Stmt.meaning, ``SolidityImporter.Sol.assignWith,
+    ``SolidityImporter.Sol.checked, ``SolidityImporter.Sol.Expr.meaning]
+  for dep in [``Verity.setMapping, ``Verity.setStorage, ``Verity.Stdlib.Math.safeAdd] do
+    unless semantics.contains dep do
+      throwError "semantics does not bottom out in Verity primitive: {dep}"
   logInfo "CHECKED_TRANSPARENT_DECLARATIONS"
 solidity_contract Existing from "../../Contracts/VaultFromSolidity/Vault.sol"
 run_cmd do
@@ -207,9 +258,23 @@ run_cmd do
             check("CHECKED_TRANSPARENT_DECLARATIONS" in output and
                   "DUPLICATE_ALIAS_REJECTED" in output,
                   "safe transparent readable definitions and collision rollback")
-            check("Verity.setMapping" in output and "Verity.setStorage" in output and
+            check("SolidityImporter.Sol.Fn.meaning" in output and
+                  "SolidityImporter.Sol.Stmt.assign" in output and
+                  "SolidityImporter.Sol.LVal.mapping" in output,
+                  "#print deposit exposes the parsed Solidity AST under its meaning")
+            check("Verity.bind" in output and "SolidityImporter.Sol.checked" in output and
                   "safeAdd" in output,
-                  "#print deposit exposes readable source-derived behavior")
+                  "#print of the semantics exposes the Verity primitives it bottoms out in")
+            check("fun v => v.totalAssets : Contracts.VaultFromSolidity.Storage → Verity.Uint256" in output,
+                  "named storage view supports v.totalAssets dot notation")
+            check("def Contracts.VaultFromSolidity.view" in output and
+                  "shareBalancesSlot.slot" in output and "readMap" in output and
+                  "readSlot" in output,
+                  "#print view constructs Storage from named slot handles")
+            check("def Contracts.VaultFromSolidity.step" in output and
+                  "deposit" in output and "totalSupply" in output and
+                  "∃" in output,
+                  "#print step is the entry-point relation")
         finally:
             probe.unlink(missing_ok=True)
 
@@ -234,22 +299,95 @@ run_cmd do
         edit_source(original)
         build()
 
-        for name, theorem, old, new in (
-            ("deposit behavior", "deposit_meets_spec", b"totalSupply += assets;", b"totalSupply = assets;"),
-            ("getter behavior", "balance_meets_spec", b"return shareBalances[account];", b"return totalAssets;"),
+        def slot_numbers() -> list[str]:
+            slot_probe = root / ".lake/solidity-import/SlotProbe.lean"
+            try:
+                slot_probe.write_text(
+                    "import Contracts.VaultFromSolidity.VaultFromSolidity\n"
+                    "#eval [Contracts.VaultFromSolidity.totalAssetsSlot.slot,"
+                    " Contracts.VaultFromSolidity.totalSupplySlot.slot,"
+                    " Contracts.VaultFromSolidity.shareBalancesSlot.slot]\n"
+                )
+                return re.findall(r"\[\d+, \d+, \d+\]", run(root, [LAKE, "env", "lean", str(slot_probe)]))
+            finally:
+                slot_probe.unlink(missing_ok=True)
+
+        declarations = b"    uint256 public totalAssets;\n    uint256 public totalSupply;\n"
+        check(original.count(declarations) == 1 and slot_numbers() == ["[0, 1, 2]"],
+              "baseline storage layout puts totalAssets, totalSupply, shareBalances at slots 0, 1, 2")
+        edit_source(original.replace(
+            declarations, b"    uint256 public totalSupply;\n    uint256 public totalAssets;\n"))
+        build()
+        check(slot_numbers() == ["[1, 0, 2]"],
+              "reordering state variables binds the spec names to the new slots and proofs still pass")
+        edit_source(original)
+        build()
+
+        edit_source(original.replace(b"totalAssets", b"assetsTotal"))
+        output = build(False, "Invalid field `totalAssets`")
+        check(re.search(r"Contracts/VaultFromSolidity/Spec\.lean:\d+:\d+:", output) is not None,
+              "renaming a state variable makes the named spec fail to elaborate")
+        edit_source(original)
+        build()
+
+        def broken_theorems(output: str) -> set[str]:
+            error_lines = [int(value) for value in re.findall(
+                r"Contracts/VaultFromSolidity/Proofs/ExecutionProof\.lean:(\d+):", output)]
+            return {name for name, (start, end) in theorem_ranges.items()
+                    if any(start <= line <= end for line in error_lines)}
+
+        # A behaviour change in Vault.sol must break both the success theorem
+        # and the human-facing `*_meets_spec` theorem. Lean adds a failed
+        # theorem with `sorry`, so a spec theorem derived from the success
+        # lemma would keep elaborating; requiring an error inside its own range
+        # shows the spec layer is proved against the imported definitions itself.
+        mint = b"    function mint(uint256 a) external { totalSupply += a; }\n"
+        old_balance = b"    function balanceOf(address account) external view returns (uint256) {"
+        for name, theorems, old, new in (
+            ("deposit behavior", ("deposit_success_spec", "deposit_meets_spec"),
+             b"totalSupply += assets;", b"totalSupply = assets;"),
+            ("getter behavior", ("balance_success_spec", "balance_meets_spec"),
+             b"return shareBalances[account];", b"return totalAssets;"),
+            ("new entry point", ("solvent_invariant",), old_balance, mint + old_balance),
         ):
             check(original.count(old) == 1, name + " mutation has one source target")
             before = artifacts()
             edit_source(original.replace(old, new))
-            output = build(False, "Contracts.VaultFromSolidity.Proofs.Execution")
-            error_lines = [int(value) for value in re.findall(
-                r"Contracts/VaultFromSolidity/Proofs/Execution\.lean:(\d+):", output)]
-            start, end = theorem_ranges[theorem]
-            check(any(start <= line <= end for line in error_lines),
-                  name + f" mutation breaks {theorem}")
+            output = build(False, "Contracts.VaultFromSolidity.Proofs.ExecutionProof")
+            broken = broken_theorems(output)
+            for theorem in theorems:
+                check(theorem in broken, name + f" mutation breaks {theorem}")
             check(before != artifacts(), name + " preserved-mtime edit refreshes artifacts")
             edit_source(original)
             build()
+
+
+        # The spec layer is not vacuous: a wrong promise in Spec.lean is unprovable
+        # against the unchanged Solidity, and the failure lands in both the
+        # corresponding success theorem and the `*_meets_spec` theorem.
+        spec = root / "Contracts/VaultFromSolidity/Spec.lean"
+        spec_original = spec.read_bytes()
+        for name, theorems, old, new in (
+            ("deposit spec without the supply increment",
+             ("deposit_success_spec", "deposit_meets_spec"),
+             b"post.totalSupply = pre.totalSupply + amount", b"post.totalSupply = pre.totalSupply"),
+            ("withdraw spec without the supply decrement",
+             ("withdraw_success_spec", "withdraw_meets_spec"),
+             b"post.totalSupply = pre.totalSupply - amount", b"post.totalSupply = pre.totalSupply"),
+            ("getter spec returning the wrong variable",
+             ("balance_success_spec", "balance_meets_spec"),
+             b"result = v.shareBalances account", b"result = v.totalSupply"),
+        ):
+            check(spec_original.count(old) == 1, name + " mutation has one spec target")
+            spec.write_bytes(spec_original.replace(old, new))
+            try:
+                output = build(False, "Contracts.VaultFromSolidity.Proofs.ExecutionProof")
+            finally:
+                spec.write_bytes(spec_original)
+            broken = broken_theorems(output)
+            for theorem in theorems:
+                check(theorem in broken, name + f" is unprovable: breaks {theorem}")
+        build()
 
         for name, old, new, diagnostic in (
             ("contract layout at", b"contract Vault {", b"contract Vault layout at 100 {", "layout at"),
@@ -258,6 +396,10 @@ run_cmd do
             ("loop", b"totalAssets += assets;", b"while (assets < totalAssets) { totalAssets += assets; }", "WhileStatement"),
             ("second contract", b"contract Vault {", b"contract Other {}\ncontract Vault {", "exactly one"),
             ("multiplication", b"totalAssets += assets;", b"totalAssets = totalAssets * assets;", "unsupported binary"),
+            ("reserved Storage name", b"uint256 public totalSupply;",
+             b"uint256 public totalSupply;\n    uint256 public Storage;", "unsupported/reserved name"),
+            ("reserved step name", b"uint256 public totalSupply;",
+             b"uint256 public totalSupply;\n    uint256 public step;", "unsupported/reserved name"),
         ):
             edit_source(original.replace(old, new))
             output = build(False, diagnostic)
@@ -291,6 +433,21 @@ solidity_contract Escaped from "../../Contracts/VaultFromSolidity/Vault.sol"
         check(before != artifacts(), "Lean importer content change invalidates Vault artifacts")
         check(digest_before != source_digest(), "Lean importer content changes sourceDigest")
         importer.write_bytes(importer_original)
+        build()
+
+        # The semantics is part of the trusted path, so its content must move the
+        # digest exactly like the parser does.
+        semantics = root / "Contracts/VaultFromSolidity/Importer/Semantics.lean"
+        semantics_original = semantics.read_bytes()
+        semantics_stamp = semantics.stat()
+        before = artifacts()
+        digest_before = source_digest()
+        semantics.write_bytes(semantics_original + b"\n-- acceptance semantics identity probe\n")
+        os.utime(semantics, ns=(semantics_stamp.st_atime_ns, semantics_stamp.st_mtime_ns))
+        build()
+        check(before != artifacts(), "Lean semantics content change invalidates Vault artifacts")
+        check(digest_before != source_digest(), "Lean semantics content changes sourceDigest")
+        semantics.write_bytes(semantics_original)
         build()
 
         policy = root / "lakefile.lean"
@@ -395,8 +552,10 @@ run_cmd do
     logInfo m!"EXPECTED_KERNEL_ERROR {e.toMessageData}"
   unless rejected do throwError "malformed declaration accepted"
   for suffix in ["totalAssetsSlot", "totalSupplySlot", "shareBalancesSlot",
-                 "totalAssets", "totalSupply", "shareBalances", "deposit", "sourceDigest"] do
-    if (← getEnv).contains (`Broken ++ Name.mkSimple suffix) then
+                 "totalAssets", "totalSupply", "shareBalances", "deposit", "sourceDigest",
+                 "Storage", "Storage.mk", "Storage.totalAssets", "Storage.totalSupply",
+                 "Storage.shareBalances", "view", "step"] do
+    if (← getEnv).contains (`Broken ++ suffix.toName) then
       throwError "partial declaration escaped rollback: {suffix}"
   logInfo "KERNEL_REJECTION_ROLLED_BACK"
 ''')

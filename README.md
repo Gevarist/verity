@@ -26,13 +26,40 @@
 `Contracts/VaultFromSolidity/VaultFromSolidity.lean` imports the colocated
 `Vault.sol` with `solidity_contract VaultFromSolidity from "Vault.sol"`.
 The Lean frontend invokes pinned solc 0.8.33 for typed AST and storage layout,
-validates and translates them directly, then registers transparent,
-kernel-checked `Verity.Contract` definitions in memory. There is no Python
+validates them, and parses them into the closed, intrinsically typed inductive in
+`Contracts/VaultFromSolidity/Importer/Syntax.lean`. `Importer/Semantics.lean`
+gives each construct its one meaning, and each entry point is registered in
+memory as `Fn.meaning` applied to its parsed term, as a transparent,
+kernel-checked `Verity.Contract` definition. There is no Python
 frontend, custom serialized IR, generated `.lean`, CompilationModel, or
 bytecode. The example is independent of the
-handwritten `Contracts/Vault` contract. `Spec.lean` states the vault's solvency
-invariant plus the exact post-state of each entry point, and
-`Proofs/Execution.lean` proves them against the imported definitions.
+handwritten `Contracts/Vault` contract.
+
+The importer elaborates a kernel-checked `Storage` structure named after the
+Solidity state variables, so `Spec.lean` reads like the contract instead of
+naming raw slots:
+
+```lean
+-- before
+def solvent (s : ContractState) : Prop := s.readSlot 0 = s.readSlot 1
+
+-- after
+def solvent (v : Storage) : Prop := v.totalAssets = v.totalSupply
+
+def deposit_spec (amount : Uint256) (caller : Address) (pre post : Storage) : Prop :=
+  post.totalAssets = pre.totalAssets + amount ∧
+  post.totalSupply = pre.totalSupply + amount ∧
+  post.shareBalances caller = pre.shareBalances caller + amount ∧
+  ∀ other, other ≠ caller → post.shareBalances other = pre.shareBalances other
+```
+
+`view` constructs that `Storage` from the `<var>Slot` handles solc's storage
+layout produced, so reordering the Solidity declarations moves the slots without
+touching the spec, and renaming a variable makes the spec fail to elaborate.
+`#print view` shows the `readSlot`/`readMap` unfolding. The importer also
+registers a deterministic entry-point relation `step`. `Proofs/ExecutionProof.lean`
+proves each successful call meets its spec and that `solvent` is preserved by
+`step` (`solvent_invariant`).
 
 With the Lean/package prerequisites installed, put the official Linux-amd64 solc
 0.8.33 binary at `.lake/solidity-import/solc` and make it executable. Its accepted
@@ -42,12 +69,18 @@ SHA-256 digest is
 ```sh
 lake build VaultFromSolidity
 python3 Contracts/VaultFromSolidity/Importer/scripts/solidity_importer_test.py
+lake build SolidityImportSmokeInheritance
+python3 Contracts/SolidityImportSmoke/Inheritance/scripts/inheritance_test.py
 ```
 
-The acceptance script uses disposable copies for source mutations, fail-closed
+The Vault acceptance script uses disposable copies for source mutations, fail-closed
 rejection, content-based Lake freshness, compiler/importer/build-policy
 invalidation, declaration-registration rollback, and an audit of every Vault
-theorem. It never mutates the original Solidity file.
+theorem. It never mutates the original Solidity file. The inheritance smoke
+(`Contracts/SolidityImportSmoke/Inheritance`) covers same-file `is` bases, C3
+linearization including a diamond, virtual dispatch, `super` (target C3, not
+the defining-contract AST id), opaque fields, and internal calls (`Expr.call`
+is view/pure only); `inheritance_test.py` is the matching focused suite.
 Save Solidity, rebuild this dedicated target, then reload the Lean editor:
 an already-open editor snapshot does not automatically watch `.sol` changes.
 See [the trust boundary](TRUST_ASSUMPTIONS.md#proof-only-solidity-vault-import).

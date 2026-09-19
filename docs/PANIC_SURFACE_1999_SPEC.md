@@ -2,7 +2,7 @@
 
 ## Implemented Contract
 
-Compiler-generated checked arithmetic uses a closed panic-code domain through
+Compiler-generated unsigned checked arithmetic uses a closed panic-code domain through
 the compilation model and typed IR:
 
 - `Verity.Core.PanicCode` has exactly two constructors:
@@ -101,3 +101,7 @@ These are separate proof projects and do not block this slice:
    feature requires it.
 
 No project-level axiom is added by this implementation.
+
+The signed `Int256` wrappers retain their existing type-specific guards and
+diagnostic-string revert lowering. Migrating that separately introduced surface
+to typed panic payloads is outside this unsigned-arithmetic slice.

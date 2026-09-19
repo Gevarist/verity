@@ -13,25 +13,48 @@ through synthetic compiler-output mutations, plus unsupported source constructs,
 contract `layout at`,
 registered-source symlink escape, and Lean importer digest sensitivity. It also
 checks safe transparent declarations, duplicate aliases, a deliberately
-malformed late declaration and complete registration rollback, plus the pinned
-compiler's checksum. The digest scope is documented in `TRUST_ASSUMPTIONS.md`; it is not a transitive build identity.
+malformed late declaration and complete registration rollback (including the
+named storage view), plus the pinned compiler's checksum. Named-storage checks
+cover `v.totalAssets` dot notation and `#print view`, a
+declaration-reorder mutation that moves solc slots while every proof still
+builds, a state-variable rename that makes `Spec.lean` fail to elaborate, and
+Solidity variables named `Storage` or `step` rejected with a source position.
+Behaviour mutations must break both the `*_success_spec` theorem and the
+`*_meets_spec` theorem of the affected entry point, three `Spec.lean` mutations
+that weaken a promise must fail inside both corresponding theorems, and a new
+`mint` entry point must break `solvent_invariant`. The `spec_named_storage`
+lean_lint rule (in `make check`) rejects every raw `ContractState` accessor
+(the list is read from `Verity/Core.lean`), raw storage fields, direct
+`ContractState` mentions, positional projections, and `knownAddresses` in
+opted-in spec files. The digest scope is documented in `TRUST_ASSUMPTIONS.md`; it is not a transitive build identity.
 
 Evidence command:
 `python3 Contracts/VaultFromSolidity/Importer/scripts/solidity_importer_test.py`
 (after `lake build VaultFromSolidity` and installation of the pinned compiler).
 The focused runner builds and audits the imported execution proofs, changes
 accepted deposit/getter behavior while preserving source mtime and requires old
-proofs to fail, rejects unsupported source, checks unchanged artifacts, and
+proofs to fail at both the success and spec layer, weakens the named spec
+and requires both corresponding theorems to fail, rejects unsupported source,
+checks unchanged artifacts, and
 exercises Lean-importer and compiler content invalidation. Mutations occur only
 in disposable copies. This is local acceptance evidence, not a new CI job,
 bytecode/runtime test, or proof of translation correctness.
 
 The complete example surface lives under `Contracts/VaultFromSolidity`: Solidity
 source, Lean importer, specification, execution proofs and focused acceptance
-tests. It is independent of the handwritten `Contracts/Vault` example. No
+tests. It is independent of the handwritten `Contracts/Vault` example. The S1
+inheritance slice adds `Contracts/SolidityImportSmoke/Inheritance` with the same
+shape (source, import command, named-storage spec, proofs, focused Python
+suite). No
 Python frontend, custom serialized IR, generated Lean source, or bytecode is in
-the translation path. Trust and axiom scope are recorded in
+the translation path: the accepted Solidity subset is the kernel-checked
+inductive in `Importer/Syntax.lean` and `Importer/Semantics.lean` is its single
+meaning. Trust and axiom scope are recorded in
 `TRUST_ASSUMPTIONS.md` and `AXIOMS.md`.
+
+Evidence command for the inheritance slice:
+`python3 Contracts/SolidityImportSmoke/Inheritance/scripts/inheritance_test.py`
+(after `lake build SolidityImportSmokeInheritance`).
 
 ## Current Audit State
 
@@ -323,7 +346,7 @@ sibling entrypoint.
   boundary is enforced at the theorem support witness instead.
 - `Verity/Core/Uint256.lean`: `checkedSub`/`checkedMul` + `subNoWrap`/`mulNoWrap`
   complete the checked-arithmetic lane (#1993) alongside `checkedAdd`.
-- Solidity-0.8-style arithmetic binds now lower to structured panic control
+- Solidity-0.8-style unsigned arithmetic binds now lower to structured panic control
   flow. `Verity/Macro/Translate/Expr.lean` emits an exact failure predicate,
   `Stmt.panic .arithmeticOverflow` for overflow/underflow or
   `Stmt.panic .divisionByZero` for division by zero, and then the arithmetic

@@ -25,32 +25,66 @@ independently of source registration.
 
 `Importer.lean` runs pinned solc itself with `--standard-json` and
 `--no-import-callback`, parses the typed AST/storage layout, validates the
-closed subset, resolves IDs/types/storage slots, and constructs expressions
-through explicit `translateExpr` / `translateStmt` cases. Declaration
+closed subset, resolves IDs/types/storage slots, and parses it into the closed,
+intrinsically typed inductive in `Syntax.lean`. Each entry point is registered
+as `Semantics.lean`'s `Fn.meaning` applied to that parsed term, so
+`Semantics.lean` is the single definition of what each construct means and is
+part of the digest. Declaration
 registration disables asynchronous kernel checking inside the transaction,
-restores the pre-import environment on failure, checks every body against its
-typed return signature, and registers safe transparent definitions. The
-frontend emits no generated Lean source and keeps no serialized AST/model
-cache.
+restores the pre-import environment on failure, parses every body at its typed
+return signature (an ill-typed body is unrepresentable), and registers safe
+transparent definitions. The same
+transaction elaborates `Storage` with the standard structure command (the one
+use of that elaborator; kernel-checked, rolled back on failure), then
+registers `view : ContractState → Storage` built from the imported
+`<var>Slot` handles, tags slot handles, getters, functions, and `view` into
+the `solidity_import` simp set, and registers a deterministic entry-point
+relation `step` (the target's public/external functions in source order, then
+each base in linearization order, then public getters in field order).
+`Storage`, `view`, and `step` are reserved Solidity names. Opaque fields are
+listed in `opaqueFields`. The importer source manifest is `registeredSources`. The
+frontend emits no generated Lean source and keeps
+no serialized AST/model cache; the parsed term is a kernel-checked Lean value,
+never serialized. `Semantics.lean` tags its definitions into the
+`solidity_import` simp set, so `solidity_simp` unfolds `Fn.meaning` down to the
+Verity primitives exactly as it did before the split.
 
-The accepted fragment covers the existing Vault: full-width scalars,
-address-to-uint256 mappings and public getters, straight-line reads/writes,
-locals, checked addition/subtraction, and comparison/custom-error guards.
-Unknown executable constructs are rejected; this is not general Solidity support.
+The accepted fragment covers the existing Vault plus the S1 inheritance slice:
+full-width `uint256` scalars, `address` scalars, address-to-uint256 mappings and
+public getters, straight-line reads/writes, locals, checked addition/subtraction,
+comparison/custom-error guards, same-file `is` bases with solc's C3
+linearization (including diamonds), virtual dispatch and `super` specialized at
+import time from the target's `linearizedBaseContracts` (matching 0.8.x runtime;
+the AST `referencedDeclaration` on `super` follows the defining contract and is
+not the dispatch key on diamonds), internal function calls (`Expr.call` is
+`view`/`pure` only; effectful internals are `Stmt.callStmt`, because legacy
+codegen evaluates those calls before the other operand / `+=` old-read),
+abstract bases with body-less `virtual`s,
+and opaque storage fields (slot reserved, not in `Storage`; a body that reads or
+writes one is rejected). Unknown executable constructs are rejected; this is not
+general Solidity support. Multi-file units, modifiers, packed fields, and
+external calls remain out of the fragment.
 Arguments/context are already typed and decoded. `Contract.run` rolls back
 failed executions; errors are model strings, not verified ABI revert bytes.
 The storage model uses logical keys, not a proof of physical keccak layout.
 There is no deployment, calldata/dispatch, gas, external interaction, bytecode,
 or full EVM equivalence claim. Initial states are arbitrary, not proven deployed
 states. Arithmetic success premises restrict the success theorems. The example keeps one
-readable proof set: the exact post-state of each entry point plus the vault's
-solvency invariant (`totalAssets = totalSupply`) preserved by deposit and
-withdrawal. Revert-path behaviour (nonpayability, insufficient
-shares/assets/supply, late-overflow rollback) is exercised by the acceptance
-suite, not proved here.
+readable proof set: each successful entry point meets its named-storage spec
+(`*_success_spec`), each spec holds under its precondition (`*_meets_spec`),
+and the vault's solvency invariant (`totalAssets = totalSupply`) is preserved
+by `step` (`solvent_invariant`). Rollback on revert is proved by `run_snd_cases`;
+the revert conditions themselves are exercised by the acceptance suite, not proved.
 
-The specification and execution proof file refer directly to the imported
-definitions. Zero-argument custom errors use Verity's `Name()` model convention;
+The specification states its promises over the imported storage view
+(`v.totalAssets`, `v.shareBalances account`) rather than raw slot numbers; the
+execution proof file relates that view to the imported definitions. Each
+`*_meets_spec` theorem asserts that the call succeeds under its precondition
+and that the successful post-state (or returned value) meets the spec, so a
+reverting implementation cannot satisfy it; the `*_success_spec` theorems pin
+the same named-storage equations from a success hypothesis. The view adds no
+trust: `view` unfolds to `ContractState.readSlot`/`readMap` at the slot
+solc's storage layout assigned. Zero-argument custom errors use Verity's `Name()` model convention;
 arithmetic panic strings remain a model representation, not an assertion of
 matching EVM revert bytes. The statements do not assert full equivalence of all
 executions or all public/deployment interfaces.
@@ -133,6 +167,17 @@ Current theorem totals, property-test coverage, and proof status live in [docs/V
 - **Remaining gap for whole-program retargeting**: The public EndToEnd native surface is in place, but the per-`BridgedStraightStmt` IR↔native observation-equivalence framework that would land truly unconditional S1–S8 / F2/F4/F6/F7 / true S8 has not been built yet — that work is multi-week and tracked separately. The external-call/function-table family now has function-table-aware closure scaffolding in `Compiler/Proofs/YulGeneration/Backends/EvmYulLeanCallClosure.lean` (per-family source-level predicates, per-family `compileStmt`/`compileStmtList` closure theorems, `ECMBridgeable` per-module obligation, and a `BridgedStmts`-preserving `pfx ++ sfx` composition lemma); end-to-end wiring through `SupportedFragment`/`SupportedSpec` for whole contracts using these constructors is the next milestone.
 - **Implication**: Semantic correctness does not imply gas-safety.
 - **Proxy note**: `delegatecall`-based proxy / upgradeability flows still sit outside the current native verified runtime model. Archive `--trust-report` and use `--deny-proxy-upgradeability` when proxy semantics must remain outside the selected verified subset (issue `#1420`).
+
+### 6b. Modeled-callee `linked_contracts` bindings
+
+- **Role**: A `linked_contracts name : IFace := Callee` section tells the
+  model plane that an interface-typed value is the named `verity_contract`.
+- **Trust**: model-level assumption that the runtime address holds that
+  contract. There is **no bytecode claim**: compilation-model lowering of a
+  bound call is the same ABI/ECM call as an unbound interface call.
+- **Semantics**: hops in `Verity.MultiContract.MultiWorld` (`ModeledCall.lean`).
+  `callEntry` is unchanged (still rejects `caller = callee`); self-calls use
+  the isolated CALL-shaped `selfCallEntry` / `Contract.selfCall`.
 
 ### 7. External Call Modules (ECMs)
 - **Role**: Reusable typed external call patterns (ERC-20 writes/reads including `totalSupply`, ERC-4626 preview/conversion helpers plus `totalAssets`, `asset`, `max*` limit reads, and `deposit`, oracle reads, precompiles 0x01 / 0x02 / 0x06 / 0x07 / 0x08 — `ecrecover`, `sha256`, BN254 `bn256Add`, `bn256ScalarMul`, `bn256Pairing` — callbacks, and same-contract `selfDelegateMulticallBytes`).
@@ -220,7 +265,7 @@ proven, not assumed (see `Compiler/Proofs/ArithmeticProfile.lean`). Checked
 operations (`safeAdd`, `safeSub`, `safeMul`, `safeDiv`) are available for
 explicit overflow and division-by-zero protection.
 
-The Solidity-0.8-style `addPanic`/`subPanic`/`mulPanic`/`divPanic` bind forms
+The unsigned Solidity-0.8-style `addPanic`/`subPanic`/`mulPanic`/`divPanic` bind forms
 use the closed `PanicCode` domain: the macro emits a matching failure predicate
 plus `Stmt.panic .arithmeticOverflow` or `Stmt.panic .divisionByZero`, which
 compiles to the canonical 36-byte `Panic(uint256)` ABI payload (selector
