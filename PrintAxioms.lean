@@ -5,6 +5,8 @@
 import Compiler.Proofs.YulGeneration.Backends.EvmYulLeanNativeStepLemmas
 import Compiler.CompilationModel.ReservedScratchNames
 import Contracts.SolidityImportSmoke.Inheritance.Proofs
+import Contracts.SolidityImportSmoke.Modifiers.Proofs
+import Contracts.SolidityImportSmoke.Structs.Proofs
 import Contracts.Counter.Proofs.Basic
 import Contracts.Counter.Proofs.Correctness
 import Contracts.Counter.Proofs.Preview
@@ -304,6 +306,21 @@ end Verity.AxiomAudit
   Contracts.SolidityImportSmoke.Inheritance.Proofs.go_meets_spec
   Contracts.SolidityImportSmoke.Inheritance.Proofs.bump_meets_spec
   Contracts.SolidityImportSmoke.Inheritance.Proofs.paused_invariant
+
+  -- Contracts/SolidityImportSmoke/Modifiers/Proofs.lean
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.status_restored
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.early_meets_spec
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.guarded_success_spec
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.guarded_reverts_not_owner_before_pause
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.tagged_uses_base_helper
+  Contracts.SolidityImportSmoke.Modifiers.Proofs.snapshot_restores_status
+
+  -- Contracts/SolidityImportSmoke/Structs/Proofs.lean
+  Contracts.SolidityImportSmoke.Structs.Proofs.set_then_get
+  Contracts.SolidityImportSmoke.Structs.Proofs.other_member_unchanged_thm
+  Contracts.SolidityImportSmoke.Structs.Proofs.get_meets_spec
+  Contracts.SolidityImportSmoke.Structs.Proofs.make_encodes
+  Contracts.SolidityImportSmoke.Structs.Proofs.makeRev_encodes
 
   -- Contracts/Counter/Proofs/Basic.lean
   Contracts.Counter.Proofs.setStorage_updates_count
@@ -7609,4 +7626,4 @@ end Verity.AxiomAudit
   Compiler.Proofs.YulGeneration.YulTransaction.ofIR_args
 ]
 
--- Total: 7029 theorems/lemmas (5016 public, 2013 private, 0 sorry'd)
+-- Total: 7040 theorems/lemmas (5027 public, 2013 private, 0 sorry'd)

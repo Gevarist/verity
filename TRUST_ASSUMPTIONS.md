@@ -59,21 +59,41 @@ never serialized. `Semantics.lean` tags its definitions into the
 `solidity_import` simp set, so `solidity_simp` unfolds `Fn.meaning` down to the
 Verity primitives exactly as it did before the split.
 
-The accepted fragment covers the existing Vault plus the S1 inheritance slice:
-full-width `uint256` scalars, `address` scalars, address-to-uint256 mappings and
-public getters, straight-line reads/writes, locals, checked addition/subtraction,
-comparison/custom-error guards, same-file `is` bases with solc's C3
+The accepted fragment covers the existing Vault, the S1 inheritance slice, and
+the S2 modifiers/structs slice: full-width `uint256` scalars, `address` scalars,
+address-to-uint256 mappings and public getters, straight-line reads/writes,
+locals, checked addition/subtraction, comparison/custom-error guards (including
+`address !=` for `onlyOwner`), same-file `is` bases with solc's C3
 linearization (including diamonds), virtual dispatch and `super` specialized at
-import time from the target's `linearizedBaseContracts` (matching 0.8.x runtime;
-the AST `referencedDeclaration` on `super` follows the defining contract and is
-not the dispatch key on diamonds), internal function calls (`Expr.call` is
-`view`/`pure` only; effectful internals are `Stmt.callStmt`, because legacy
-codegen evaluates those calls before the other operand / `+=` old-read),
-abstract bases with body-less `virtual`s,
-and opaque storage fields (slot reserved, not in `Storage`; a body that reads or
-writes one is rejected). Unknown executable constructs are rejected; this is not
-general Solidity support. Multi-file units, modifiers, packed fields, and
-external calls remain out of the fragment.
+  import time from the target's `linearizedBaseContracts` (matching 0.8.x runtime;
+  the AST `referencedDeclaration` on `super` follows the defining contract and is
+  not the dispatch key on diamonds; `super` inside an inlined modifier starts
+  after that modifier's defining contract, not the function's), internal function
+  calls (`Expr.call` is
+  `view`/`pure` only; effectful internals are `Stmt.callStmt`, because legacy
+  codegen evaluates those calls before the other operand / `+=` old-read),
+  abstract bases with body-less `virtual`s, opaque storage fields (slot reserved,
+  not in `Storage`; a body that reads or writes one is rejected), argument-free
+  modifiers inlined at parse time in declaration order (`Stmt.seq` prelude plus
+  `Stmt.block` so a function `return` still runs the postlude; prelude `uint256`
+  locals scope over the inlined body and postlude; identifier calls in a
+  modifier body that resolve to a private or non-virtual helper stay bound to
+  the declaring contract even if a derived contract declares a same-name private
+  function; a modifier with
+  two `_`, with arguments, or with a prelude `return` before `_` is rejected;
+  `Semantics.lean` never sees `_`), named `address`/struct returns defaulting to
+  the zero address rather than `msg.sender`, and
+  user structs used as parameters, storage, and returns when they are the closed
+  `uint256` then `address` pair (members occupy consecutive solc slots; encode is
+  `Expr.pair` indexed by the solc struct id so same-shape structs stay distinct
+  in signatures; a public struct field registers one product getter; a storage
+  struct assignment binds the RHS pair once; named `Acc({...})` constructors
+  evaluate arguments in source order (pinned 0.8.33) then pack into the
+  `uint256 × address` member product — `Expr.pair` when names are already
+  member order, `Expr.pairRev` when they are `{who, amount}`; positional
+  `Acc(a, b)` stays AST/member order). Unknown executable constructs are
+rejected; this is not general Solidity support. Multi-file units, packed
+fields, events, and external calls remain out of the fragment.
 Arguments/context are already typed and decoded. `Contract.run` rolls back
 failed executions; errors are model strings, not verified ABI revert bytes.
 The storage model uses logical keys, not a proof of physical keccak layout.
